@@ -127,7 +127,7 @@ struct StatsView: View {
     
     // Refresh data
     private func refreshData() {
-        sleepManager.fetchSleepData()
+        sleepManager.fetchSleepDataSync()
         
         // Simulate refresh delay and reset refreshing state
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
@@ -151,7 +151,7 @@ struct StatsView: View {
         isHealthKitAuthorized = (status == .sharingAuthorized)
         
         if isHealthKitAuthorized {
-            sleepManager.fetchSleepData()
+            sleepManager.fetchSleepDataSync()
         } else {
             requestHealthKitAccess()
         }
@@ -163,7 +163,7 @@ struct StatsView: View {
             DispatchQueue.main.async {
                 isHealthKitAuthorized = success
                 if success {
-                    sleepManager.fetchSleepData()
+                    sleepManager.fetchSleepDataSync()
                 } else {
                     showingAuthorizationAlert = true
                 }

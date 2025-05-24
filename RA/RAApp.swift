@@ -82,7 +82,7 @@ struct RAApp: App {
             if success {
                 print("HealthKit authorization successful")
                 DispatchQueue.main.async {
-                    sleepManager.fetchSleepData()
+                    sleepManager.fetchSleepDataSync()
                 }
             } else if let error = error {
                 print("HealthKit authorization failed: \(error.localizedDescription)")

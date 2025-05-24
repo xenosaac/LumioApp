@@ -459,21 +459,6 @@ struct MetricCard: View {
     }
 }
 
-// MARK: - Sleep Stage Extension
-
-extension SleepStage {
-    var depthValue: Double {
-        switch self {
-        case .awake: return 0.0
-        case .rem: return 1.0
-        case .core: return 2.0
-        case .deep: return 3.0
-        case .inBed: return -0.5
-        case .asleep: return 1.5
-        }
-    }
-}
-
 struct SleepChartView_Previews: PreviewProvider {
     static var previews: some View {
         SleepChartView()

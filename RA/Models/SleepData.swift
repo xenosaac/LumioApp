@@ -1,5 +1,6 @@
 import Foundation
 import HealthKit
+import CoreMotion
 
 // Sleep data point model
 struct SleepDataPoint: Identifiable, Codable {
@@ -50,11 +51,23 @@ enum SleepStage: Int, Codable, CaseIterable {
         }
     }
     
+    // Depth value for chart visualization
+    var depthValue: Double {
+        switch self {
+        case .inBed: return -0.5
+        case .awake: return 0.0
+        case .rem: return 1.0
+        case .asleep: return 1.5
+        case .core: return 2.0
+        case .deep: return 3.0
+        }
+    }
+    
     static func fromHKCategoryValue(_ value: Int) -> SleepStage {
         switch value {
         case HKCategoryValueSleepAnalysis.inBed.rawValue:
             return .inBed
-        case HKCategoryValueSleepAnalysis.asleep.rawValue:
+        case HKCategoryValueSleepAnalysis.asleepUnspecified.rawValue:
             return .asleep
         case HKCategoryValueSleepAnalysis.awake.rawValue:
             return .awake
@@ -68,6 +81,36 @@ enum SleepStage: Int, Codable, CaseIterable {
             return .asleep
         }
     }
+}
+
+// Motion data record for sleep analysis
+struct MotionRecord {
+    let timestamp: Date
+    let motionLevel: Int // 0 = still, 1 = light movement, 2 = significant movement
+    let accelerationVariance: Double
+}
+
+// Heart rate data record
+struct HeartRateRecord {
+    let timestamp: Date
+    let heartRate: Double
+}
+
+// HRV data record
+struct HRVRecord {
+    let timestamp: Date
+    let hrv: Double
+}
+
+// 30-second epoch data for sleep stage inference
+struct SleepEpoch {
+    let startTime: Date
+    let endTime: Date
+    let averageHeartRate: Double?
+    let averageHRV: Double?
+    let motionLevel: Int
+    let officialStage: SleepStage?
+    let inferredStage: SleepStage?
 }
 
 // Sleep data manager
@@ -98,8 +141,20 @@ class SleepManager: ObservableObject {
     // Health store for HealthKit access
     let healthStore = HKHealthStore()
     
+    // CoreMotion manager for motion data
+    private let motionManager = CMMotionManager()
+    private let activityManager = CMMotionActivityManager()
+    
     // Observer query
     private var observerQuery: HKObserverQuery?
+    
+    // Last fetch timestamp for incremental updates
+    @Published var lastFetchTime: Date = Calendar.current.date(byAdding: .day, value: -30, to: Date()) ?? Date()
+    
+    // Raw sensor data storage
+    private var heartRateData: [HeartRateRecord] = []
+    private var hrvData: [HRVRecord] = []
+    private var motionData: [MotionRecord] = []
     
     private init() {
         // Load saved data initially
@@ -134,7 +189,7 @@ class SleepManager: ObservableObject {
             
             // Fetch new data when changes are detected
             DispatchQueue.main.async {
-                self.fetchSleepData()
+                self.fetchSleepDataSync()
                 completionHandler()
             }
         }
@@ -155,7 +210,7 @@ class SleepManager: ObservableObject {
         }
     }
     
-    // Request authorization for sleep data
+    // Request authorization for all required health data
     func requestAuthorization(completion: @escaping (Bool, Error?) -> Void) {
         // Check if HealthKit is available
         guard HKHealthStore.isHealthDataAvailable() else {
@@ -163,58 +218,340 @@ class SleepManager: ObservableObject {
             return
         }
         
-        // Define the sleep analysis type
-        guard let sleepType = HKObjectType.categoryType(forIdentifier: .sleepAnalysis) else {
+        // Define all required health types
+        guard let sleepType = HKObjectType.categoryType(forIdentifier: .sleepAnalysis),
+              let heartRateType = HKObjectType.quantityType(forIdentifier: .heartRate),
+              let hrvType = HKObjectType.quantityType(forIdentifier: .heartRateVariabilitySDNN) else {
             completion(false, nil)
             return
         }
         
+        let typesToRead: Set<HKObjectType> = [sleepType, heartRateType, hrvType]
+        
         // Request authorization
-        healthStore.requestAuthorization(toShare: nil, read: [sleepType]) { success, error in
+        healthStore.requestAuthorization(toShare: nil, read: typesToRead) { success, error in
             completion(success, error)
         }
     }
     
-    // Fetch sleep data from HealthKit
-    func fetchSleepData() {
+    // Comprehensive sleep data fetching with sensor fusion
+    func fetchSleepData() async {
         guard HKHealthStore.isHealthDataAvailable() else { return }
         
-        guard let sleepType = HKObjectType.categoryType(forIdentifier: .sleepAnalysis) else { return }
-        
-        // Calculate the start date based on the selected time range
         let calendar = Calendar.current
         let endDate = Date()
         let startDate = calendar.date(byAdding: .day, value: -selectedTimeRange.days, to: endDate) ?? endDate
         
-        // Create the predicate for the query
-        let predicate = HKQuery.predicateForSamples(withStart: startDate, end: endDate, options: .strictStartDate)
+        // Fetch all data types concurrently
+        async let officialSleep = fetchOfficialSleepData(from: lastFetchTime, to: endDate)
+        async let heartRate = fetchHeartRateData(from: startDate, to: endDate)
+        async let hrv = fetchHRVData(from: startDate, to: endDate)
         
-        // Create the query
-        let query = HKSampleQuery(sampleType: sleepType, predicate: predicate, limit: HKObjectQueryNoLimit, sortDescriptors: nil) { [weak self] _, samples, error in
-            guard let self = self, let samples = samples as? [HKCategorySample], error == nil else {
-                print("Error fetching sleep data: \(error?.localizedDescription ?? "unknown error")")
-                return
-            }
+        // Start motion monitoring if available
+        await startMotionMonitoring()
+        
+        do {
+            let (sleepSamples, hrSamples, hrvSamples) = await (officialSleep, heartRate, hrv)
+            
+            // Store raw data
+            self.heartRateData = hrSamples
+            self.hrvData = hrvSamples
+            
+            // Process and merge data
+            let processedSleepData = await processSleepData(
+                officialSleep: sleepSamples,
+                heartRate: hrSamples,
+                hrv: hrvSamples,
+                motion: motionData,
+                from: startDate,
+                to: endDate
+            )
             
             DispatchQueue.main.async {
-                var newSleepData: [SleepDataPoint] = []
-                
-                for sample in samples {
-                    let sleepStage = SleepStage.fromHKCategoryValue(sample.value)
-                    let sleepDataPoint = SleepDataPoint(
-                        startTime: sample.startDate,
-                        endTime: sample.endDate,
-                        sleepStage: sleepStage
-                    )
-                    newSleepData.append(sleepDataPoint)
-                }
-                
-                self.sleepData = newSleepData
+                self.sleepData = processedSleepData
+                self.lastFetchTime = endDate
                 self.saveData()
+            }
+            
+        } catch {
+            print("Error fetching comprehensive sleep data: \(error.localizedDescription)")
+        }
+    }
+    
+    // MARK: - Individual Data Fetching Methods
+    
+    // Fetch official sleep analysis data from HealthKit
+    private func fetchOfficialSleepData(from startDate: Date, to endDate: Date) async -> [HKCategorySample] {
+        guard let sleepType = HKObjectType.categoryType(forIdentifier: .sleepAnalysis) else {
+            return []
+        }
+        
+        let predicate = HKQuery.predicateForSamples(withStart: startDate, end: endDate, options: .strictStartDate)
+        
+        return await withCheckedContinuation { continuation in
+            let query = HKSampleQuery(sampleType: sleepType, predicate: predicate, limit: HKObjectQueryNoLimit, sortDescriptors: nil) { _, samples, error in
+                if let error = error {
+                    print("Error fetching official sleep data: \(error.localizedDescription)")
+                    continuation.resume(returning: [])
+                } else {
+                    continuation.resume(returning: samples as? [HKCategorySample] ?? [])
+                }
+            }
+            healthStore.execute(query)
+        }
+    }
+    
+    // Fetch heart rate data from HealthKit
+    private func fetchHeartRateData(from startDate: Date, to endDate: Date) async -> [HeartRateRecord] {
+        guard let heartRateType = HKObjectType.quantityType(forIdentifier: .heartRate) else {
+            return []
+        }
+        
+        let predicate = HKQuery.predicateForSamples(withStart: startDate, end: endDate, options: .strictStartDate)
+        
+        return await withCheckedContinuation { continuation in
+            let query = HKSampleQuery(sampleType: heartRateType, predicate: predicate, limit: HKObjectQueryNoLimit, sortDescriptors: nil) { _, samples, error in
+                if let error = error {
+                    print("Error fetching heart rate data: \(error.localizedDescription)")
+                    continuation.resume(returning: [])
+                } else {
+                    let heartRateRecords = (samples as? [HKQuantitySample])?.compactMap { sample in
+                        HeartRateRecord(
+                            timestamp: sample.startDate,
+                            heartRate: sample.quantity.doubleValue(for: HKUnit.count().unitDivided(by: .minute()))
+                        )
+                    } ?? []
+                    continuation.resume(returning: heartRateRecords)
+                }
+            }
+            healthStore.execute(query)
+        }
+    }
+    
+    // Fetch HRV data from HealthKit
+    private func fetchHRVData(from startDate: Date, to endDate: Date) async -> [HRVRecord] {
+        guard let hrvType = HKObjectType.quantityType(forIdentifier: .heartRateVariabilitySDNN) else {
+            return []
+        }
+        
+        let predicate = HKQuery.predicateForSamples(withStart: startDate, end: endDate, options: .strictStartDate)
+        
+        return await withCheckedContinuation { continuation in
+            let query = HKSampleQuery(sampleType: hrvType, predicate: predicate, limit: HKObjectQueryNoLimit, sortDescriptors: nil) { _, samples, error in
+                if let error = error {
+                    print("Error fetching HRV data: \(error.localizedDescription)")
+                    continuation.resume(returning: [])
+                } else {
+                    let hrvRecords = (samples as? [HKQuantitySample])?.compactMap { sample in
+                        HRVRecord(
+                            timestamp: sample.startDate,
+                            hrv: sample.quantity.doubleValue(for: HKUnit.secondUnit(with: .milli))
+                        )
+                    } ?? []
+                    continuation.resume(returning: hrvRecords)
+                }
+            }
+            healthStore.execute(query)
+        }
+    }
+    
+    // Start motion monitoring using CoreMotion
+    private func startMotionMonitoring() async {
+        guard motionManager.isDeviceMotionAvailable else {
+            print("Device motion not available")
+            return
+        }
+        
+        // Clear existing motion data
+        motionData.removeAll()
+        
+        // Start device motion updates for sleep period detection
+        if !motionManager.isDeviceMotionActive {
+            motionManager.deviceMotionUpdateInterval = 0.1 // 10 Hz
+            motionManager.startDeviceMotionUpdates()
+        }
+        
+        // Also try to get historical motion activity if available
+        await fetchHistoricalMotionActivity()
+    }
+    
+    // Fetch historical motion activity
+    private func fetchHistoricalMotionActivity() async {
+        guard CMMotionActivityManager.isActivityAvailable() else {
+            print("Motion activity not available")
+            return
+        }
+        
+        let calendar = Calendar.current
+        let endDate = Date()
+        let startDate = calendar.date(byAdding: .day, value: -1, to: endDate) ?? endDate
+        
+        return await withCheckedContinuation { continuation in
+            activityManager.queryActivityStarting(from: startDate, to: endDate, to: OperationQueue.main) { activities, error in
+                if let error = error {
+                    print("Error fetching motion activity: \(error.localizedDescription)")
+                } else if let activities = activities {
+                    // Convert motion activities to motion records
+                    let motionRecords = activities.compactMap { activity -> MotionRecord? in
+                        let motionLevel: Int
+                        if activity.running || activity.walking {
+                            motionLevel = 2 // Significant movement
+                        } else if activity.automotive {
+                            motionLevel = 1 // Light movement
+                        } else {
+                            motionLevel = 0 // Still
+                        }
+                        
+                        return MotionRecord(
+                            timestamp: activity.startDate,
+                            motionLevel: motionLevel,
+                            accelerationVariance: 0.0 // Not available from CMMotionActivity
+                        )
+                    }
+                    
+                    self.motionData.append(contentsOf: motionRecords)
+                }
+                continuation.resume()
+            }
+        }
+    }
+    
+    // MARK: - Data Processing Methods
+    
+    // Process and merge all sleep data using sensor fusion
+    private func processSleepData(
+        officialSleep: [HKCategorySample],
+        heartRate: [HeartRateRecord],
+        hrv: [HRVRecord],
+        motion: [MotionRecord],
+        from startDate: Date,
+        to endDate: Date
+    ) async -> [SleepDataPoint] {
+        
+        // Convert to epochs (30-second intervals)
+        let epochs = await epochize(
+            officialSleep: officialSleep,
+            heartRate: heartRate,
+            hrv: hrv,
+            motion: motion,
+            from: startDate,
+            to: endDate
+        )
+        
+        // Process epochs into sleep data points
+        var sleepDataPoints: [SleepDataPoint] = []
+        var currentStage: SleepStage?
+        var currentStartTime: Date?
+        
+        for epoch in epochs {
+            let finalStage = epoch.officialStage ?? epoch.inferredStage ?? .asleep
+            
+            if finalStage != currentStage {
+                // Stage change detected
+                if let startTime = currentStartTime, let stage = currentStage {
+                    sleepDataPoints.append(SleepDataPoint(
+                        startTime: startTime,
+                        endTime: epoch.startTime,
+                        sleepStage: stage
+                    ))
+                }
+                currentStage = finalStage
+                currentStartTime = epoch.startTime
             }
         }
         
-        healthStore.execute(query)
+        // Add final segment
+        if let startTime = currentStartTime, let stage = currentStage {
+            sleepDataPoints.append(SleepDataPoint(
+                startTime: startTime,
+                endTime: endDate,
+                sleepStage: stage
+            ))
+        }
+        
+        return sleepDataPoints.sorted { $0.startTime < $1.startTime }
+    }
+    
+    // Convert raw data into 30-second epochs
+    private func epochize(
+        officialSleep: [HKCategorySample],
+        heartRate: [HeartRateRecord],
+        hrv: [HRVRecord],
+        motion: [MotionRecord],
+        from startDate: Date,
+        to endDate: Date
+    ) async -> [SleepEpoch] {
+        
+        var epochs: [SleepEpoch] = []
+        let epochDuration: TimeInterval = 30 // 30 seconds
+        
+        var currentTime = startDate
+        while currentTime < endDate {
+            let epochEnd = min(currentTime.addingTimeInterval(epochDuration), endDate)
+            
+            // Find official sleep stage for this epoch
+            let officialStage = officialSleep.first { sample in
+                sample.startDate <= currentTime && sample.endDate > currentTime
+            }.map { SleepStage.fromHKCategoryValue($0.value) }
+            
+            // Calculate average heart rate for this epoch
+            let epochHeartRates = heartRate.filter { record in
+                record.timestamp >= currentTime && record.timestamp < epochEnd
+            }
+            let avgHeartRate = epochHeartRates.isEmpty ? nil : epochHeartRates.map(\ .heartRate).average()
+            
+            // Calculate average HRV for this epoch
+            let epochHRV = hrv.filter { record in
+                record.timestamp >= currentTime && record.timestamp < epochEnd
+            }
+            let avgHRV = epochHRV.isEmpty ? nil : epochHRV.map(\ .hrv).average()
+            
+            // Determine motion level for this epoch
+            let epochMotion = motion.filter { record in
+                record.timestamp >= currentTime && record.timestamp < epochEnd
+            }
+            let motionLevel = epochMotion.isEmpty ? 0 : (epochMotion.map(\ .motionLevel).max() ?? 0)
+            
+            // Infer sleep stage if no official stage available
+            let inferredStage = (officialStage == nil && avgHeartRate != nil) ? 
+                inferSleepStage(heartRate: avgHeartRate!, hrv: avgHRV ?? 0, motionLevel: motionLevel) : nil
+            
+            let epoch = SleepEpoch(
+                startTime: currentTime,
+                endTime: epochEnd,
+                averageHeartRate: avgHeartRate,
+                averageHRV: avgHRV,
+                motionLevel: motionLevel,
+                officialStage: officialStage,
+                inferredStage: inferredStage
+            )
+            
+            epochs.append(epoch)
+            currentTime = epochEnd
+        }
+        
+        return epochs
+    }
+    
+    // Backup rule algorithm for sleep stage inference
+    private func inferSleepStage(heartRate: Double, hrv: Double, motionLevel: Int) -> SleepStage {
+        // Large movement indicates awakening
+        if motionLevel == 2 {
+            return .awake
+        }
+        
+        // Deep sleep: low HR, low HRV, no movement
+        if heartRate < 55 && hrv < 30 && motionLevel == 0 {
+            return .deep
+        }
+        
+        // REM sleep: higher HR, higher HRV, no movement
+        if heartRate > 65 && hrv > 50 && motionLevel == 0 {
+            return .rem
+        }
+        
+        // Default to core sleep for other combinations
+        return .core
     }
     
     // Filter data based on current time range
@@ -365,5 +702,39 @@ class SleepManager: ObservableObject {
         
         sleepData = mockData
         saveData()
+    }
+    
+    // MARK: - Utility Methods
+    
+    // Get heart rate data for external access (e.g., SmartWakeManager)
+    func getHeartRateData() -> [HeartRateRecord] {
+        return heartRateData
+    }
+    
+    // Get motion data for external access
+    func getMotionData() -> [MotionRecord] {
+        return motionData
+    }
+    
+    // Update the wrapper for async fetchSleepData to maintain compatibility
+    func fetchSleepDataSync() {
+        Task {
+            await fetchSleepData()
+        }
+    }
+}
+
+// MARK: - Extensions
+
+extension Optional {
+    func `let`<U>(_ transform: (Wrapped) -> U) -> U? {
+        return self.map(transform)
+    }
+}
+
+extension Array where Element == Double {
+    func average() -> Double {
+        guard !isEmpty else { return 0.0 }
+        return reduce(0, +) / Double(count)
     }
 } 

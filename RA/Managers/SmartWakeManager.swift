@@ -268,6 +268,72 @@ class SmartWakeManager: ObservableObject {
             }
         }
     }
+    
+    // MARK: - Sleep Data Integration
+    
+    // Find optimal wake times based on current sleep data
+    func findOptimalWakeTimes(around targetTime: Date, window: TimeInterval) -> [Date] {
+        let sleepData = sleepManager.sleepData
+        let heartRateData = sleepManager.getHeartRateData()
+        let motionData = sleepManager.getMotionData()
+        
+        // Look for light sleep stages or REM periods near target time
+        let windowStart = targetTime.addingTimeInterval(-window)
+        let windowEnd = targetTime
+        
+        let relevantSleepData = sleepData.filter { dataPoint in
+            dataPoint.startTime >= windowStart && dataPoint.endTime <= windowEnd
+        }
+        
+        // Find periods of light sleep (core, rem) or brief awakenings
+        let optimalPeriods = relevantSleepData.filter { dataPoint in
+            dataPoint.sleepStage == .core || dataPoint.sleepStage == .rem || dataPoint.sleepStage == .awake
+        }
+        
+        // Convert to optimal wake times (prefer start of light sleep periods)
+        let optimalTimes = optimalPeriods.map { $0.startTime }
+        
+        // If no optimal periods found, use backup heart rate analysis
+        if optimalTimes.isEmpty {
+            return findOptimalTimesFromHeartRate(around: targetTime, window: window, heartRateData: heartRateData)
+        }
+        
+        return optimalTimes.sorted()
+    }
+    
+    // Backup method using heart rate data for optimal wake time detection
+    private func findOptimalTimesFromHeartRate(around targetTime: Date, window: TimeInterval, heartRateData: [HeartRateRecord]) -> [Date] {
+        let windowStart = targetTime.addingTimeInterval(-window)
+        let windowEnd = targetTime
+        
+        let relevantHeartRate = heartRateData.filter { record in
+            record.timestamp >= windowStart && record.timestamp <= windowEnd
+        }
+        
+        // Look for periods where heart rate is increasing (natural awakening)
+        var optimalTimes: [Date] = []
+        
+        for i in 1..<relevantHeartRate.count {
+            let current = relevantHeartRate[i]
+            let previous = relevantHeartRate[i-1]
+            
+            // Detect increasing heart rate trend (indicating lighter sleep)
+            if current.heartRate > previous.heartRate + 5 { // 5 BPM increase threshold
+                optimalTimes.append(current.timestamp)
+            }
+        }
+        
+        // If still no optimal times, just return the target time
+        return optimalTimes.isEmpty ? [targetTime] : optimalTimes.sorted()
+    }
+    
+    // Get current sleep stage based on latest data
+    func getCurrentSleepStage() -> SleepStage? {
+        let now = Date()
+        return sleepManager.sleepData.first { dataPoint in
+            dataPoint.startTime <= now && dataPoint.endTime > now
+        }?.sleepStage
+    }
 }
 
 // Wake event data model
