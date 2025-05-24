@@ -38,6 +38,10 @@
 	<string>This app requires access to your sleep data to analyze and display your sleep patterns.</string>
 	<key>NSHealthUpdateUsageDescription</key>
 	<string>This app does not write any health data.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>This app needs microphone access to record your voice during dream conversations with the AI assistant.</string>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>This app uses speech recognition to transcribe your dream descriptions during conversations with the AI assistant.</string>
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>audio</string>
