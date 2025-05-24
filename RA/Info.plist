@@ -48,5 +48,9 @@
 		<string>fetch</string>
 		<string>processing</string>
 	</array>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>We need access to your microphone to record your dream descriptions.</string>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>We need speech recognition to understand your dream descriptions.</string>
 </dict>
 </plist>
