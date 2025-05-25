@@ -511,54 +511,248 @@ struct VoiceActivityIndicator: View {
 
 struct DreamHistoryView: View {
     @EnvironmentObject var dreamManager: DreamConversationManager
+    @State private var searchText = ""
+    @State private var selectedMoodFilter: DreamMood? = nil
+    
+    var filteredSessions: [DreamSession] {
+        let sessions = dreamManager.dreamSessions.sorted(by: { $0.startTime > $1.startTime })
+        
+        var filtered = sessions
+        
+        // Filter by search text
+        if !searchText.isEmpty {
+            filtered = filtered.filter { session in
+                // Search in title, summary, tags, or message content
+                let searchableContent = [
+                    session.title ?? "",
+                    session.dreamSummary ?? "",
+                    session.tags.joined(separator: " "),
+                    session.messages.map { $0.content }.joined(separator: " ")
+                ].joined(separator: " ").lowercased()
+                
+                return searchableContent.contains(searchText.lowercased())
+            }
+        }
+        
+        // Filter by mood
+        if let selectedMood = selectedMoodFilter {
+            filtered = filtered.filter { $0.mood == selectedMood }
+        }
+        
+        return filtered
+    }
     
     var body: some View {
         NavigationView {
-            List {
+            VStack(spacing: 0) {
                 if dreamManager.dreamSessions.isEmpty {
-                    VStack(spacing: 16) {
+                    // Empty state
+                    VStack(spacing: 20) {
                         Image(systemName: "moon.stars")
-                    .font(.system(size: 60))
-                    .foregroundColor(.gray)
+                            .font(.system(size: 80))
+                            .foregroundColor(.blue.opacity(0.6))
                         
-                        Text("No Dream Sessions Yet")
-                            .font(.title2)
-                            .fontWeight(.semibold)
-                            .foregroundColor(.gray)
+                        VStack(spacing: 8) {
+                            Text("Your Dream Journey Awaits")
+                                .font(.title2)
+                                .fontWeight(.bold)
+                                .foregroundColor(.primary)
+                            
+                            Text("Start your first conversation to begin tracking your dreams and building your personal dream journal")
+                                .font(.body)
+                                .foregroundColor(.secondary)
+                                .multilineTextAlignment(.center)
+                                .padding(.horizontal)
+                        }
                         
-                        Text("Start your first conversation to track your dreams")
-                            .font(.body)
-                            .foregroundColor(.secondary)
-                            .multilineTextAlignment(.center)
+                        VStack(spacing: 12) {
+                            HStack(spacing: 16) {
+                                FeatureHighlight(
+                                    icon: "brain.head.profile",
+                                    title: "AI Analysis",
+                                    description: "Get insights into your dreams"
+                                )
+                                
+                                FeatureHighlight(
+                                    icon: "heart.fill",
+                                    title: "Mood Tracking",
+                                    description: "Track emotional patterns"
+                                )
+                            }
+                            
+                            HStack(spacing: 16) {
+                                FeatureHighlight(
+                                    icon: "tag.fill",
+                                    title: "Dream Elements",
+                                    description: "Discover recurring symbols"
+                                )
+                                
+                                FeatureHighlight(
+                                    icon: "clock.fill",
+                                    title: "Journey History",
+                                    description: "Review past dreams"
+                                )
+                            }
+                        }
+                        .padding(.horizontal)
                     }
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 40)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .background(Color(.systemGroupedBackground))
                 } else {
-                    ForEach(dreamManager.dreamSessions.sorted(by: { $0.startTime > $1.startTime })) { session in
-                        DreamSessionRow(session: session)
+                    // Search and filter section
+                    VStack(spacing: 12) {
+                        // Search bar
+                        HStack {
+                            Image(systemName: "magnifyingglass")
+                                .foregroundColor(.secondary)
+                            
+                            TextField("Search dreams...", text: $searchText)
+                                .textFieldStyle(PlainTextFieldStyle())
+                        }
+                        .padding()
+                        .background(Color(.systemGray6))
+                        .cornerRadius(12)
+                        
+                        // Mood filter
+                        ScrollView(.horizontal, showsIndicators: false) {
+                            HStack(spacing: 8) {
+                                // All filter
+                                Button(action: { selectedMoodFilter = nil }) {
+                                    Text("All")
+                                        .font(.caption)
+                                        .fontWeight(.medium)
+                                        .padding(.horizontal, 12)
+                                        .padding(.vertical, 6)
+                                        .background(selectedMoodFilter == nil ? Color.blue : Color(.systemGray5))
+                                        .foregroundColor(selectedMoodFilter == nil ? .white : .primary)
+                                        .cornerRadius(16)
+                                }
+                                
+                                // Mood filters
+                                ForEach(DreamMood.allCases, id: \.self) { mood in
+                                    Button(action: { 
+                                        selectedMoodFilter = selectedMoodFilter == mood ? nil : mood 
+                                    }) {
+                                        HStack(spacing: 4) {
+                                            Text(mood.emoji)
+                                                .font(.caption)
+                                            
+                                            Text(mood.rawValue)
+                                                .font(.caption)
+                                                .fontWeight(.medium)
+                                        }
+                                        .padding(.horizontal, 12)
+                                        .padding(.vertical, 6)
+                                        .background(selectedMoodFilter == mood ? moodColor(for: mood) : Color(.systemGray5))
+                                        .foregroundColor(selectedMoodFilter == mood ? .white : .primary)
+                                        .cornerRadius(16)
+                                    }
+                                }
+                            }
+                            .padding(.horizontal)
+                        }
                     }
-                    .onDelete(perform: deleteSessions)
+                    .padding()
+                    .background(Color(.systemGroupedBackground))
+                    
+                    // Dream sessions list
+                    if filteredSessions.isEmpty {
+                        VStack(spacing: 16) {
+                            Image(systemName: "magnifyingglass")
+                                .font(.system(size: 40))
+                                .foregroundColor(.gray)
+                            
+                            Text("No dreams found")
+                                .font(.headline)
+                                .foregroundColor(.gray)
+                            
+                            Text("Try adjusting your search or filters")
+                                .font(.body)
+                                .foregroundColor(.secondary)
+                        }
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .background(Color(.systemGroupedBackground))
+                    } else {
+                        ScrollView {
+                            LazyVStack(spacing: 16) {
+                                ForEach(filteredSessions) { session in
+                                    DreamSessionRow(session: session)
+                                        .padding(.horizontal)
+                                }
+                            }
+                            .padding(.vertical)
+                        }
+                        .background(Color(.systemGroupedBackground))
+                    }
                 }
             }
-            .navigationTitle("Dream History")
+            .navigationTitle("Dream Journey")
             .toolbar {
                 if !dreamManager.dreamSessions.isEmpty {
                     ToolbarItem(placement: .navigationBarTrailing) {
-                        EditButton()
+                        Menu {
+                            Button(action: { 
+                                searchText = ""
+                                selectedMoodFilter = nil
+                            }) {
+                                Label("Clear Filters", systemImage: "clear")
+                            }
+                            
+                            Button(role: .destructive, action: {
+                                dreamManager.clearAllSessions()
+                            }) {
+                                Label("Clear All Dreams", systemImage: "trash")
+                            }
+                        } label: {
+                            Image(systemName: "ellipsis.circle")
+                        }
                     }
                 }
             }
         }
     }
     
-    private func deleteSessions(offsets: IndexSet) {
-        let sortedSessions = dreamManager.dreamSessions.sorted(by: { $0.startTime > $1.startTime })
-        for index in offsets {
-            if let sessionIndex = dreamManager.dreamSessions.firstIndex(where: { $0.id == sortedSessions[index].id }) {
-                dreamManager.dreamSessions.remove(at: sessionIndex)
-            }
+    private func moodColor(for mood: DreamMood) -> Color {
+        switch mood {
+        case .pleasant: return .green
+        case .anxious: return .orange
+        case .nightmare: return .red
+        case .lucid: return .purple
+        case .vivid: return .blue
+        case .peaceful: return .mint
+        case .neutral: return .gray
         }
-        dreamManager.saveDreamSessions()
+    }
+}
+
+// MARK: - Feature Highlight
+
+struct FeatureHighlight: View {
+    let icon: String
+    let title: String
+    let description: String
+    
+    var body: some View {
+        VStack(spacing: 8) {
+            Image(systemName: icon)
+                .font(.title2)
+                .foregroundColor(.blue)
+            
+            Text(title)
+                .font(.caption)
+                .fontWeight(.semibold)
+                .foregroundColor(.primary)
+            
+            Text(description)
+                .font(.caption2)
+                .foregroundColor(.secondary)
+                .multilineTextAlignment(.center)
+        }
+        .frame(maxWidth: .infinity)
+        .padding()
+        .background(Color(.systemBackground))
+        .cornerRadius(12)
+        .shadow(color: Color.black.opacity(0.05), radius: 2, x: 0, y: 1)
     }
 }
 
@@ -570,55 +764,133 @@ struct DreamSessionRow: View {
     
     var body: some View {
         Button(action: { showingDetail = true }) {
-            VStack(alignment: .leading, spacing: 8) {
-                HStack {
-                    Text(session.startTime, style: .date)
-                        .font(.headline)
+            VStack(alignment: .leading, spacing: 12) {
+                // Header with title and mood
+                HStack(alignment: .top) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        // Dream Title (prominent)
+                        if let title = session.title, !title.isEmpty {
+                            if title == "Generating title..." {
+                                HStack {
+                                    ProgressView()
+                                        .scaleEffect(0.7)
+                                    Text("Generating AI title...")
+                                        .font(.headline)
+                                        .fontWeight(.semibold)
+                                        .foregroundColor(.blue)
+                                }
+                            } else {
+                                Text(title)
+                                    .font(.headline)
+                                    .fontWeight(.semibold)
+                                    .foregroundColor(.primary)
+                                    .multilineTextAlignment(.leading)
+                            }
+                        } else {
+                            Text("Untitled Dream")
+                                .font(.headline)
+                                .fontWeight(.semibold)
+                                .foregroundColor(.secondary)
+                        }
+                        
+                        // Date and time as subtitle
+                        HStack {
+                            Text(session.startTime, style: .date)
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                            Text("•")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                            Text(session.startTime, style: .time)
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                            Text("•")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                            Text(session.formattedDuration)
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
+                    }
                     
                     Spacer()
                     
+                    // Mood indicator
                     if let mood = session.mood {
-                        Text(mood.emoji)
-                            .font(.title2)
+                        VStack(spacing: 2) {
+                            Text(mood.emoji)
+                                .font(.title2)
+                            Text(mood.rawValue)
+                                .font(.caption2)
+                                .foregroundColor(.secondary)
+                        }
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(
+                            RoundedRectangle(cornerRadius: 8)
+                                .fill(Color(mood.color).opacity(0.2))
+                        )
                     }
                 }
                 
-                if let summary = session.dreamSummary, !summary.isEmpty {
-                    Text(summary)
-                        .font(.body)
-                        .lineLimit(2)
-                        .foregroundColor(.secondary)
+                // AI Summary preview (if available)
+                if let summary = session.dreamSummary, !summary.isEmpty && summary != "No dream content recorded" {
+                    if summary == "Generating AI analysis..." {
+                        HStack {
+                            ProgressView()
+                                .scaleEffect(0.7)
+                            Text("AI is analyzing your dream...")
+                                .font(.subheadline)
+                                .foregroundColor(.blue)
+                                .italic()
+                        }
+                    } else {
+                        Text(summary)
+                            .font(.subheadline)
+                            .foregroundColor(.secondary)
+                            .lineLimit(2)
+                            .multilineTextAlignment(.leading)
+                    }
                 }
                 
-                HStack {
-                    Text(session.formattedDuration)
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                    
-                    Spacer()
-                    
-                    Text("\(session.messages.count) messages")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                }
-                
+                // Keywords/Tags
                 if !session.tags.isEmpty {
                     ScrollView(.horizontal, showsIndicators: false) {
-                        HStack {
-                            ForEach(session.tags, id: \.self) { tag in
+                        HStack(spacing: 6) {
+                            ForEach(Array(session.tags.prefix(4)), id: \.self) { tag in
                                 Text(tag)
                                     .font(.caption)
+                                    .fontWeight(.medium)
                                     .padding(.horizontal, 8)
-                                    .padding(.vertical, 4)
-                                    .background(Color.blue.opacity(0.1))
-                                    .cornerRadius(8)
+                                    .padding(.vertical, 3)
+                                    .background(
+                                        RoundedRectangle(cornerRadius: 6)
+                                            .fill(Color.orange.opacity(0.2))
+                                    )
+                                    .foregroundColor(.orange)
+                            }
+                            
+                            if session.tags.count > 4 {
+                                Text("+\(session.tags.count - 4)")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                                    .padding(.horizontal, 4)
                             }
                         }
                         .padding(.horizontal, 1)
                     }
                 }
             }
-            .padding(.vertical, 4)
+            .padding()
+            .background(
+                RoundedRectangle(cornerRadius: 16)
+                    .fill(Color(.systemBackground))
+                    .shadow(color: Color.black.opacity(0.1), radius: 4, x: 0, y: 2)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 16)
+                    .stroke(Color(.systemGray5), lineWidth: 1)
+            )
         }
         .buttonStyle(PlainButtonStyle())
         .sheet(isPresented: $showingDetail) {
@@ -632,106 +904,472 @@ struct DreamSessionRow: View {
 struct DreamSessionDetailView: View {
     let session: DreamSession
     @Environment(\.dismiss) private var dismiss
+    @EnvironmentObject var dreamManager: DreamConversationManager
+    
+    @State private var isEditingTitle = false
+    @State private var isEditingSummary = false
+    @State private var isEditingMood = false
+    @State private var isEditingKeywords = false
+    
+    @State private var editedTitle = ""
+    @State private var editedSummary = ""
+    @State private var editedMood: DreamMood?
+    @State private var editedKeywords = ""
     
     var body: some View {
         NavigationView {
             ScrollView {
-                VStack(alignment: .leading, spacing: 20) {
-                    // Session Info
+                VStack(alignment: .leading, spacing: 24) {
+                    // Dream Title (editable)
                     VStack(alignment: .leading, spacing: 8) {
-                        Text("Session Details")
-                            .font(.headline)
-                        
                         HStack {
-                            Text("Date:")
-                                .fontWeight(.semibold)
-                            Text(session.startTime, style: .date)
-                        }
-                        
-                        HStack {
-                            Text("Duration:")
-                                .fontWeight(.semibold)
-                            Text(session.formattedDuration)
-                        }
-                        
-                        if let mood = session.mood {
-                            HStack {
-                                Text("Mood:")
-                                    .fontWeight(.semibold)
-                                Text("\(mood.emoji) \(mood.rawValue)")
+                            if isEditingTitle {
+                                TextField("Dream title", text: $editedTitle)
+                                    .font(.largeTitle)
+                                    .fontWeight(.bold)
+                                    .textFieldStyle(RoundedBorderTextFieldStyle())
+                                
+                                Button("Save") {
+                                    dreamManager.updateSessionTitle(session.id, newTitle: editedTitle)
+                                    isEditingTitle = false
+                                }
+                                .buttonStyle(.borderedProminent)
+                                .controlSize(.small)
+                                
+                                Button("Cancel") {
+                                    editedTitle = session.title ?? ""
+                                    isEditingTitle = false
+                                }
+                                .buttonStyle(.bordered)
+                                .controlSize(.small)
+                            } else {
+                                VStack(alignment: .leading, spacing: 4) {
+                                    if let title = session.title, !title.isEmpty && title != "Generating title..." {
+                                        Text(title)
+                                            .font(.largeTitle)
+                                            .fontWeight(.bold)
+                                            .foregroundColor(.primary)
+                                            .multilineTextAlignment(.leading)
+                                    } else {
+                                        Text("Untitled Dream")
+                                            .font(.largeTitle)
+                                            .fontWeight(.bold)
+                                            .foregroundColor(.secondary)
+                                    }
+                                }
+                                
+                                Spacer()
+                                
+                                Button(action: {
+                                    editedTitle = session.title ?? ""
+                                    isEditingTitle = true
+                                }) {
+                                    Image(systemName: "pencil")
+                                        .foregroundColor(.blue)
+                                }
+                                .buttonStyle(.bordered)
+                                .controlSize(.small)
                             }
                         }
+                        
+                        // Date and time as subtitle
+                        HStack {
+                            Text(session.startTime, style: .date)
+                                .font(.subheadline)
+                                .foregroundColor(.secondary)
+                            Text("•")
+                                .foregroundColor(.secondary)
+                            Text(session.startTime, style: .time)
+                                .font(.subheadline)
+                                .foregroundColor(.secondary)
+                        }
                     }
-                    .padding()
-                    .background(Color(.systemGray6))
-                    .cornerRadius(12)
+                    .padding(.horizontal)
                     
-                    // Tags
-                    if !session.tags.isEmpty {
-                        VStack(alignment: .leading, spacing: 8) {
-                            Text("Dream Elements")
-                                .font(.headline)
-                            
-                            LazyVGrid(columns: Array(repeating: GridItem(.flexible()), count: 3), spacing: 8) {
-                                ForEach(session.tags, id: \.self) { tag in
-                                    Text(tag)
-                                        .font(.caption)
-                                        .padding(.horizontal, 12)
-                                        .padding(.vertical, 6)
-                                        .background(Color.blue.opacity(0.1))
-                                        .cornerRadius(16)
+                    // AI Dream Summary (editable)
+                    if let summary = session.dreamSummary, !summary.isEmpty {
+                        VStack(alignment: .leading, spacing: 12) {
+                            HStack {
+                                Image(systemName: "brain.head.profile")
+                                    .foregroundColor(.purple)
+                                    .font(.title2)
+                                Text("AI Dream Analysis")
+                                    .font(.headline)
+                                    .fontWeight(.semibold)
+                                
+                                Spacer()
+                                
+                                if !isEditingSummary && summary != "Generating AI analysis..." {
+                                    Button(action: {
+                                        editedSummary = summary
+                                        isEditingSummary = true
+                                    }) {
+                                        Image(systemName: "pencil")
+                                            .foregroundColor(.purple)
+                                    }
+                                    .buttonStyle(.bordered)
+                                    .controlSize(.small)
                                 }
                             }
+                            
+                            if isEditingSummary {
+                                VStack(spacing: 8) {
+                                    TextEditor(text: $editedSummary)
+                                        .frame(minHeight: 100)
+                                        .padding(8)
+                                        .background(
+                                            RoundedRectangle(cornerRadius: 8)
+                                                .stroke(Color.purple.opacity(0.3), lineWidth: 1)
+                                        )
+                                    
+                                    HStack {
+                                        Button("Save") {
+                                            dreamManager.updateSessionSummary(session.id, newSummary: editedSummary)
+                                            isEditingSummary = false
+                                        }
+                                        .buttonStyle(.borderedProminent)
+                                        .controlSize(.small)
+                                        
+                                        Button("Cancel") {
+                                            editedSummary = summary
+                                            isEditingSummary = false
+                                        }
+                                        .buttonStyle(.bordered)
+                                        .controlSize(.small)
+                                        
+                                        Spacer()
+                                    }
+                                }
+                            } else {
+                                Text(summary)
+                                    .font(.body)
+                                    .lineSpacing(4)
+                                    .padding()
+                                    .background(
+                                        RoundedRectangle(cornerRadius: 12)
+                                            .fill(Color.purple.opacity(0.1))
+                                            .overlay(
+                                                RoundedRectangle(cornerRadius: 12)
+                                                    .stroke(Color.purple.opacity(0.3), lineWidth: 1)
+                                            )
+                                    )
+                            }
                         }
-                        .padding()
-                        .background(Color(.systemGray6))
-                        .cornerRadius(12)
+                        .padding(.horizontal)
                     }
                     
-                    // Conversation Transcript
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("Conversation")
+                    // Basic Information Section
+                    VStack(alignment: .leading, spacing: 16) {
+                        Text("Dream Details")
                             .font(.headline)
+                            .fontWeight(.semibold)
+                            .padding(.horizontal)
                         
-                        ForEach(session.messages) { message in
-                            VStack(alignment: .leading, spacing: 4) {
+                        VStack(spacing: 12) {
+                            // Mood (editable)
+                            VStack(spacing: 8) {
                                 HStack {
-                                    Text(message.isFromAI ? "Dream AI" : "You")
-                                        .font(.caption)
-                                        .fontWeight(.semibold)
-                                        .foregroundColor(message.isFromAI ? .blue : .green)
+                                    if let mood = session.mood {
+                                        Text(mood.emoji)
+                                            .font(.title2)
+                                        VStack(alignment: .leading, spacing: 2) {
+                                            Text("Mood")
+                                                .font(.caption)
+                                                .foregroundColor(.secondary)
+                                            Text(mood.rawValue)
+                                                .font(.subheadline)
+                                                .fontWeight(.medium)
+                                        }
+                                    } else {
+                                        Image(systemName: "heart")
+                                            .foregroundColor(.gray)
+                                            .font(.title2)
+                                        VStack(alignment: .leading, spacing: 2) {
+                                            Text("Mood")
+                                                .font(.caption)
+                                                .foregroundColor(.secondary)
+                                            Text("Not set")
+                                                .font(.subheadline)
+                                                .fontWeight(.medium)
+                                                .foregroundColor(.gray)
+                                        }
+                                    }
                                     
                                     Spacer()
                                     
-                                    Text(message.timestamp, style: .time)
+                                    Button(action: {
+                                        editedMood = session.mood
+                                        isEditingMood = true
+                                    }) {
+                                        Image(systemName: "pencil")
+                                            .foregroundColor(.blue)
+                                    }
+                                    .buttonStyle(.bordered)
+                                    .controlSize(.small)
+                                }
+                                .padding()
+                                .background(
+                                    RoundedRectangle(cornerRadius: 10)
+                                        .fill((session.mood != nil ? Color(session.mood!.color) : Color.gray).opacity(0.1))
+                                )
+                                
+                                if isEditingMood {
+                                    VStack(spacing: 8) {
+                                        Text("Select Mood:")
+                                            .font(.caption)
+                                            .foregroundColor(.secondary)
+                                        
+                                        LazyVGrid(columns: Array(repeating: GridItem(.flexible()), count: 3), spacing: 8) {
+                                            ForEach(DreamMood.allCases, id: \.self) { mood in
+                                                Button(action: {
+                                                    editedMood = mood
+                                                }) {
+                                                    VStack(spacing: 4) {
+                                                        Text(mood.emoji)
+                                                            .font(.title2)
+                                                        Text(mood.rawValue)
+                                                            .font(.caption)
+                                                            .fontWeight(.medium)
+                                                    }
+                                                    .padding(8)
+                                                    .background(
+                                                        RoundedRectangle(cornerRadius: 8)
+                                                            .fill(editedMood == mood ? Color(mood.color).opacity(0.3) : Color.gray.opacity(0.1))
+                                                    )
+                                                    .foregroundColor(editedMood == mood ? Color(mood.color) : .primary)
+                                                }
+                                                .buttonStyle(PlainButtonStyle())
+                                            }
+                                        }
+                                        
+                                        HStack {
+                                            Button("Save") {
+                                                dreamManager.updateSessionMood(session.id, newMood: editedMood)
+                                                isEditingMood = false
+                                            }
+                                            .buttonStyle(.borderedProminent)
+                                            .controlSize(.small)
+                                            
+                                            Button("Cancel") {
+                                                editedMood = session.mood
+                                                isEditingMood = false
+                                            }
+                                            .buttonStyle(.bordered)
+                                            .controlSize(.small)
+                                            
+                                            Spacer()
+                                        }
+                                    }
+                                    .padding()
+                                    .background(
+                                        RoundedRectangle(cornerRadius: 10)
+                                            .fill(Color.gray.opacity(0.05))
+                                    )
+                                }
+                            }
+                            
+                            // Duration
+                            HStack {
+                                Image(systemName: "clock")
+                                    .foregroundColor(.blue)
+                                    .font(.title2)
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text("Duration")
                                         .font(.caption)
                                         .foregroundColor(.secondary)
+                                    Text(session.formattedDuration)
+                                        .font(.subheadline)
+                                        .fontWeight(.medium)
+                                }
+                                Spacer()
+                            }
+                            .padding()
+                            .background(
+                                RoundedRectangle(cornerRadius: 10)
+                                    .fill(Color.blue.opacity(0.1))
+                            )
+                            
+                            // AI Keywords/Tags (editable)
+                            VStack(alignment: .leading, spacing: 8) {
+                                HStack {
+                                    Image(systemName: "tag")
+                                        .foregroundColor(.orange)
+                                    Text("Dream Keywords")
+                                        .font(.caption)
+                                        .foregroundColor(.secondary)
+                                    
+                                    Spacer()
+                                    
+                                    if !isEditingKeywords {
+                                        Button(action: {
+                                            editedKeywords = session.tags.joined(separator: ", ")
+                                            isEditingKeywords = true
+                                        }) {
+                                            Image(systemName: "pencil")
+                                                .foregroundColor(.orange)
+                                        }
+                                        .buttonStyle(.bordered)
+                                        .controlSize(.small)
+                                    }
                                 }
                                 
-                                Text(message.content)
-                                    .font(.body)
-                                    .padding()
-                                    .background(message.isFromAI ? Color.blue.opacity(0.1) : Color.green.opacity(0.1))
-                                    .cornerRadius(12)
+                                if isEditingKeywords {
+                                    VStack(spacing: 8) {
+                                        TextField("Enter keywords separated by commas", text: $editedKeywords)
+                                            .textFieldStyle(RoundedBorderTextFieldStyle())
+                                        
+                                        Text("Tip: Separate keywords with commas (e.g., flying, water, family)")
+                                            .font(.caption2)
+                                            .foregroundColor(.secondary)
+                                        
+                                        HStack {
+                                            Button("Save") {
+                                                let newTags = editedKeywords
+                                                    .components(separatedBy: ",")
+                                                    .map { $0.trimmingCharacters(in: .whitespacesAndNewlines).capitalized }
+                                                    .filter { !$0.isEmpty }
+                                                dreamManager.updateSessionTags(session.id, newTags: newTags)
+                                                isEditingKeywords = false
+                                            }
+                                            .buttonStyle(.borderedProminent)
+                                            .controlSize(.small)
+                                            
+                                            Button("Cancel") {
+                                                editedKeywords = session.tags.joined(separator: ", ")
+                                                isEditingKeywords = false
+                                            }
+                                            .buttonStyle(.bordered)
+                                            .controlSize(.small)
+                                            
+                                            Spacer()
+                                        }
+                                    }
+                                } else if !session.tags.isEmpty {
+                                    LazyVGrid(columns: Array(repeating: GridItem(.flexible()), count: 3), spacing: 8) {
+                                        ForEach(session.tags, id: \.self) { tag in
+                                            Text(tag)
+                                                .font(.caption)
+                                                .fontWeight(.medium)
+                                                .padding(.horizontal, 8)
+                                                .padding(.vertical, 4)
+                                                .background(
+                                                    RoundedRectangle(cornerRadius: 8)
+                                                        .fill(Color.orange.opacity(0.2))
+                                                )
+                                                .foregroundColor(.orange)
+                                        }
+                                    }
+                                } else {
+                                    Text("No keywords yet")
+                                        .font(.caption)
+                                        .foregroundColor(.gray)
+                                        .italic()
+                                }
                             }
-                            .padding(.bottom, 8)
+                            .padding()
+                            .background(
+                                RoundedRectangle(cornerRadius: 10)
+                                    .fill(Color.orange.opacity(0.05))
+                            )
+                        }
+                        .padding(.horizontal)
+                    }
+                    
+                    // Conversation Transcript (at the bottom)
+                    VStack(alignment: .leading, spacing: 12) {
+                        Text("Conversation Transcript")
+                            .font(.headline)
+                            .fontWeight(.semibold)
+                            .padding(.horizontal)
+                        
+                        LazyVStack(spacing: 12) {
+                            ForEach(session.messages) { message in
+                                HStack(alignment: .top, spacing: 12) {
+                                    // Avatar
+                                    Circle()
+                                        .fill(message.isFromAI ? Color.blue : Color.green)
+                                        .frame(width: 32, height: 32)
+                                        .overlay(
+                                            Image(systemName: message.isFromAI ? "brain" : "person")
+                                                .foregroundColor(.white)
+                                                .font(.caption)
+                                        )
+                                    
+                                    // Message content
+                                    VStack(alignment: .leading, spacing: 4) {
+                                        HStack {
+                                            Text(message.isFromAI ? "AI Dream Guide" : "You")
+                                                .font(.caption)
+                                                .fontWeight(.semibold)
+                                                .foregroundColor(message.isFromAI ? .blue : .green)
+                                            
+                                            Spacer()
+                                            
+                                            Text(message.timestamp, style: .time)
+                                                .font(.caption2)
+                                                .foregroundColor(.secondary)
+                                        }
+                                        
+                                        Text(message.content)
+                                            .font(.body)
+                                            .lineSpacing(2)
+                                    }
+                                    .padding()
+                                    .background(
+                                        RoundedRectangle(cornerRadius: 12)
+                                            .fill(message.isFromAI ? Color.blue.opacity(0.1) : Color.green.opacity(0.1))
+                                    )
+                                    
+                                    if !message.isFromAI {
+                                        Spacer(minLength: 40)
+                                    }
+                                }
+                                .padding(.horizontal)
+                                .if(message.isFromAI) { view in
+                                    HStack {
+                                        view
+                                        Spacer(minLength: 40)
+                                    }
+                                }
+                            }
                         }
                     }
-                    .padding()
-                    .background(Color(.systemGray6))
-                    .cornerRadius(12)
+                    .padding(.bottom, 20)
                 }
-                .padding()
             }
-            .navigationTitle("Dream Session")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    Button("Done") {
+                ToolbarItem(placement: .navigationBarLeading) {
+                    Button("Close") {
                         dismiss()
                     }
                 }
+                
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button(action: {
+                        // Share functionality could be added here
+                    }) {
+                        Image(systemName: "square.and.arrow.up")
+                    }
+                }
             }
+        }
+        .onAppear {
+            editedTitle = session.title ?? ""
+            editedSummary = session.dreamSummary ?? ""
+            editedMood = session.mood
+            editedKeywords = session.tags.joined(separator: ", ")
+        }
+    }
+}
+
+// Helper extension for conditional view modifiers
+extension View {
+    @ViewBuilder func `if`<Content: View>(_ condition: Bool, transform: (Self) -> Content) -> some View {
+        if condition {
+            transform(self)
+        } else {
+            self
         }
     }
 }

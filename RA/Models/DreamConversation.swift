@@ -26,6 +26,7 @@ struct DreamSession: Identifiable, Codable {
     let dreamSummary: String?
     let mood: DreamMood?
     let tags: [String]
+    let title: String?
     
     init() {
         self.id = UUID()
@@ -35,9 +36,10 @@ struct DreamSession: Identifiable, Codable {
         self.dreamSummary = nil
         self.mood = nil
         self.tags = []
+        self.title = nil
     }
     
-    init(id: UUID = UUID(), startTime: Date, endTime: Date?, messages: [ConversationMessage], dreamSummary: String?, mood: DreamMood?, tags: [String]) {
+    init(id: UUID = UUID(), startTime: Date, endTime: Date?, messages: [ConversationMessage], dreamSummary: String?, mood: DreamMood?, tags: [String], title: String? = nil) {
         self.id = id
         self.startTime = startTime
         self.endTime = endTime
@@ -45,6 +47,7 @@ struct DreamSession: Identifiable, Codable {
         self.dreamSummary = dreamSummary
         self.mood = mood
         self.tags = tags
+        self.title = title
     }
     
     var formattedDuration: String {
