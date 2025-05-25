@@ -151,6 +151,10 @@ class DreamConversationManager: NSObject, ObservableObject {
                         let aiKeywords = try await generateAIKeywords(dreamText: dreamText)
                         print("✅ Keywords generated: \(aiKeywords)")
                         
+                        print("😊 Generating mood analysis...")
+                        let aiMood = try await generateAIMood(dreamText: dreamText)
+                        print("✅ Mood generated: \(aiMood.rawValue) \(aiMood.emoji)")
+                        
                         DispatchQueue.main.async {
                             // Update the session with AI-generated content
                             if let index = self.dreamSessions.firstIndex(where: { $0.id == session.id }) {
@@ -160,7 +164,7 @@ class DreamConversationManager: NSObject, ObservableObject {
                                     endTime: basicSession.endTime,
                                     messages: self.messages,
                                     dreamSummary: summary,
-                                    mood: self.analyzeDreamMood(),
+                                    mood: aiMood,
                                     tags: aiKeywords,
                                     title: title
                                 )
@@ -170,6 +174,7 @@ class DreamConversationManager: NSObject, ObservableObject {
                                 print("✅ AI content generated and session updated successfully")
                                 print("   📄 Title: '\(title)'")
                                 print("   📝 Summary: '\(summary.prefix(100))...'")
+                                print("   😊 Mood: \(aiMood.rawValue) \(aiMood.emoji)")
                                 print("   🏷️ Tags: \(aiKeywords)")
                             } else {
                                 print("❌ Could not find session to update")
@@ -194,7 +199,7 @@ class DreamConversationManager: NSObject, ObservableObject {
                                     endTime: basicSession.endTime,
                                     messages: self.messages,
                                     dreamSummary: String(dreamText.prefix(200)),
-                                    mood: self.analyzeDreamMood(),
+                                    mood: .neutral,
                                     tags: self.extractDreamTags(),
                                     title: "Dream Session"
                                 )
@@ -1116,30 +1121,80 @@ class DreamConversationManager: NSObject, ObservableObject {
     }
     
     private func analyzeDreamMood() -> DreamMood {
-        let dreamText = messages.filter { !$0.isFromAI }.map { $0.content }.joined(separator: " ").lowercased()
-        
-        // Enhanced mood analysis with more keywords
-        let moodKeywords: [DreamMood: [String]] = [
-            .nightmare: ["nightmare", "scary", "afraid", "terrified", "horror", "monster", "chase", "trapped", "falling", "death", "dark", "evil"],
-            .anxious: ["anxious", "worried", "stress", "nervous", "panic", "overwhelmed", "lost", "confused", "pressure", "urgent"],
-            .peaceful: ["peaceful", "calm", "serene", "tranquil", "relaxed", "gentle", "soft", "quiet", "still", "meditation"],
-            .lucid: ["lucid", "control", "aware", "conscious", "realize", "knew I was dreaming", "could control"],
-            .vivid: ["vivid", "bright", "colorful", "clear", "detailed", "realistic", "intense", "sharp"],
-            .pleasant: ["happy", "joy", "pleasant", "wonderful", "beautiful", "amazing", "love", "fun", "exciting", "magical"]
-        ]
-        
-        var moodScores: [DreamMood: Int] = [:]
-        
-        for (mood, keywords) in moodKeywords {
-            let score = keywords.reduce(0) { count, keyword in
-                count + dreamText.components(separatedBy: keyword).count - 1
-            }
-            moodScores[mood] = score
+        // For synchronous calls during session saving, return neutral and update async
+        return .neutral
+    }
+    
+    private func generateAIMood(dreamText: String) async throws -> DreamMood {
+        guard let url = URL(string: openAIURL) else {
+            throw URLError(.badURL)
         }
         
-        // Return the mood with the highest score, or neutral if no matches
-        let topMood = moodScores.max { $0.value < $1.value }
-        return topMood?.value ?? 0 > 0 ? topMood!.key : .neutral
+        let systemMessage = """
+        You are a dream mood analyzer. Analyze the dream described below and return EXACTLY ONE of these mood categories:
+        
+        Pleasant - Happy, joyful, positive dreams with good feelings
+        Anxious - Worried, stressful, overwhelming dreams with tension
+        Nightmare - Scary, terrifying, dark dreams with fear or horror
+        Lucid - Dreams where the dreamer was aware they were dreaming or had control
+        Vivid - Highly detailed, colorful, realistic dreams with intense imagery
+        Peaceful - Calm, serene, tranquil dreams with relaxation
+        Neutral - Dreams that don't strongly fit other categories
+        
+        IMPORTANT: Respond with ONLY the mood word (Pleasant, Anxious, Nightmare, Lucid, Vivid, Peaceful, or Neutral). No explanations, no additional text.
+        """
+        
+        let userPrompt = "Analyze the mood of this dream: \(dreamText)"
+        
+        let requestBody: [String: Any] = [
+            "model": AppConfig.openAIModel,
+            "messages": [
+                ["role": "system", "content": systemMessage],
+                ["role": "user", "content": userPrompt]
+            ],
+            "max_tokens": 20,
+            "temperature": 0.3
+        ]
+        
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("Bearer \(AppConfig.openAIAPIKey)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONSerialization.data(withJSONObject: requestBody)
+        
+        let (data, _) = try await URLSession.shared.data(for: request)
+        
+        if let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+           let choices = json["choices"] as? [[String: Any]],
+           let firstChoice = choices.first,
+           let message = firstChoice["message"] as? [String: Any],
+           let content = message["content"] as? String {
+            
+            let moodString = content.trimmingCharacters(in: .whitespacesAndNewlines)
+            
+            // Map the response to DreamMood enum
+            switch moodString.lowercased() {
+            case "pleasant":
+                return .pleasant
+            case "anxious":
+                return .anxious
+            case "nightmare":
+                return .nightmare
+            case "lucid":
+                return .lucid
+            case "vivid":
+                return .vivid
+            case "peaceful":
+                return .peaceful
+            case "neutral":
+                return .neutral
+            default:
+                print("⚠️ Unknown mood returned by GPT: '\(moodString)', defaulting to neutral")
+                return .neutral
+            }
+        }
+        
+        throw URLError(.cannotParseResponse)
     }
     
     private func extractDreamTags() -> [String] {
