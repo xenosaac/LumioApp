@@ -7,37 +7,48 @@ struct ContentView: View {
     @StateObject private var smartWakeManager = SmartWakeManager.shared
     
     @State private var showingSmartWakeAlert = false
+    @State private var selectedTab = 1
     
     var body: some View {
-        TabView {
+        TabView(selection: $selectedTab) {
+            SleepTrackerView()
+                .tabItem {
+                    Label("Sleep", systemImage: "bed.double")
+                }
+                .tag(0)
+            
             AlarmListView()
                 .tabItem {
                     Label("Alarms", systemImage: "alarm")
                 }
+                .tag(1)
             
-            StatsView()
-                .tabItem {
-                    Label("Sleep", systemImage: "bed.double")
-                }
-            
+            // Dream Tracker as regular tab (no longer full screen)
             DreamTrackerView()
                 .tabItem {
                     Label("Dream Tracker", systemImage: "moon.stars")
                 }
-            
-            SettingsView()
-                .tabItem {
-                    Label("Settings", systemImage: "gear")
-                }
+                .tag(2)
         }
-        .accentColor(.blue)
+        .accentColor(.appYellowDark)
         .onAppear {
             // 设置TabBar的外观
             if #available(iOS 15.0, *) {
                 let appearance = UITabBarAppearance()
-                appearance.configureWithDefaultBackground()
+                appearance.configureWithOpaqueBackground()
+                appearance.backgroundColor = UIColor(Color.appPurpleGradient)
+                
+                // Set unselected item color to white
+                appearance.stackedLayoutAppearance.normal.iconColor = UIColor.white
+                appearance.stackedLayoutAppearance.normal.titleTextAttributes = [.foregroundColor: UIColor.white]
+                
+                // Set selected item color to yellow (handled by accentColor)
+                appearance.stackedLayoutAppearance.selected.iconColor = UIColor(Color.appYellowDark)
+                appearance.stackedLayoutAppearance.selected.titleTextAttributes = [.foregroundColor: UIColor(Color.appYellowDark)]
+                
                 UITabBar.appearance().scrollEdgeAppearance = appearance
                 UITabBar.appearance().standardAppearance = appearance
+                UITabBar.appearance().unselectedItemTintColor = UIColor.white
             }
             
             // 设置NavigationBar的外观
@@ -86,5 +97,6 @@ struct ContentView: View {
         .environmentObject(NotificationManager.shared)
         .environmentObject(SleepManager.shared)
         .environmentObject(SmartWakeManager.shared)
-} 
+}
+
 
