@@ -116,24 +116,155 @@ class DreamConversationManager: NSObject, ObservableObject {
         synthesizer.stopSpeaking(at: .immediate)
         
         if let session = currentSession {
-            let completedSession = DreamSession(
+            // First save with basic analysis
+            let basicSession = DreamSession(
                 id: session.id,
                 startTime: session.startTime,
                 endTime: Date(),
                 messages: messages,
-                dreamSummary: generateDreamSummary(),
+                dreamSummary: "Generating AI analysis...",
                 mood: analyzeDreamMood(),
-                tags: extractDreamTags()
+                tags: extractDreamTags(),
+                title: "Generating title..."
             )
             
-            dreamSessions.append(completedSession)
+            dreamSessions.append(basicSession)
             saveDreamSessions()
+            
+            // Then generate AI content and update
+            let dreamText = messages.filter { !$0.isFromAI }.map { $0.content }.joined(separator: " ")
+            if dreamText.count > 50 {
+                Task {
+                    do {
+                        // Generate all AI content
+                        async let summary = generateGPTSummary(dreamText: dreamText)
+                        async let title = generateDreamTitle(dreamText: dreamText)
+                        async let aiKeywords = generateAIKeywords(dreamText: dreamText)
+                        
+                        let (generatedSummary, generatedTitle, generatedKeywords) = try await (summary, title, aiKeywords)
+                        
+                        DispatchQueue.main.async {
+                            // Update the session with AI-generated content
+                            if let index = self.dreamSessions.firstIndex(where: { $0.id == session.id }) {
+                                let updatedSession = DreamSession(
+                                    id: session.id,
+                                    startTime: session.startTime,
+                                    endTime: basicSession.endTime,
+                                    messages: self.messages,
+                                    dreamSummary: generatedSummary,
+                                    mood: self.analyzeDreamMood(),
+                                    tags: generatedKeywords,
+                                    title: generatedTitle
+                                )
+                                
+                                self.dreamSessions[index] = updatedSession
+                                self.saveDreamSessions()
+                                print("✅ AI content generated and session updated")
+                            }
+                        }
+                    } catch {
+                        print("Failed to generate AI content: \(error)")
+                        // Update with fallback content
+                        DispatchQueue.main.async {
+                            if let index = self.dreamSessions.firstIndex(where: { $0.id == session.id }) {
+                                let fallbackSession = DreamSession(
+                                    id: session.id,
+                                    startTime: session.startTime,
+                                    endTime: basicSession.endTime,
+                                    messages: self.messages,
+                                    dreamSummary: String(dreamText.prefix(200)),
+                                    mood: self.analyzeDreamMood(),
+                                    tags: self.extractDreamTags(),
+                                    title: "Dream Session"
+                                )
+                                
+                                self.dreamSessions[index] = fallbackSession
+                                self.saveDreamSessions()
+                            }
+                        }
+                    }
+                }
+            }
         }
         
         conversationState = .completed
         currentSession = nil
         currentTranscript = ""
         resetVoiceDetection()
+    }
+    
+    // MARK: - Session Editing Methods
+    
+    func updateSessionTitle(_ sessionId: UUID, newTitle: String) {
+        if let index = dreamSessions.firstIndex(where: { $0.id == sessionId }) {
+            let session = dreamSessions[index]
+            let updatedSession = DreamSession(
+                id: session.id,
+                startTime: session.startTime,
+                endTime: session.endTime,
+                messages: session.messages,
+                dreamSummary: session.dreamSummary,
+                mood: session.mood,
+                tags: session.tags,
+                title: newTitle.isEmpty ? nil : newTitle
+            )
+            dreamSessions[index] = updatedSession
+            saveDreamSessions()
+        }
+    }
+    
+    func updateSessionSummary(_ sessionId: UUID, newSummary: String) {
+        if let index = dreamSessions.firstIndex(where: { $0.id == sessionId }) {
+            let session = dreamSessions[index]
+            let updatedSession = DreamSession(
+                id: session.id,
+                startTime: session.startTime,
+                endTime: session.endTime,
+                messages: session.messages,
+                dreamSummary: newSummary.isEmpty ? nil : newSummary,
+                mood: session.mood,
+                tags: session.tags,
+                title: session.title
+            )
+            dreamSessions[index] = updatedSession
+            saveDreamSessions()
+        }
+    }
+    
+    func updateSessionMood(_ sessionId: UUID, newMood: DreamMood?) {
+        if let index = dreamSessions.firstIndex(where: { $0.id == sessionId }) {
+            let session = dreamSessions[index]
+            let updatedSession = DreamSession(
+                id: session.id,
+                startTime: session.startTime,
+                endTime: session.endTime,
+                messages: session.messages,
+                dreamSummary: session.dreamSummary,
+                mood: newMood,
+                tags: session.tags,
+                title: session.title
+            )
+            dreamSessions[index] = updatedSession
+            saveDreamSessions()
+        }
+    }
+    
+    func updateSessionTags(_ sessionId: UUID, newTags: [String]) {
+        if let index = dreamSessions.firstIndex(where: { $0.id == sessionId }) {
+            let session = dreamSessions[index]
+            let updatedSession = DreamSession(
+                id: session.id,
+                startTime: session.startTime,
+                endTime: session.endTime,
+                messages: session.messages,
+                dreamSummary: session.dreamSummary,
+                mood: session.mood,
+                tags: newTags,
+                title: session.title
+            )
+            dreamSessions[index] = updatedSession
+            saveDreamSessions()
+        }
     }
     
     // MARK: - Voice Detection Reset
@@ -570,7 +701,7 @@ class DreamConversationManager: NSObject, ObservableObject {
             - Keep responses very brief (50 words max)
             - Use natural, intimate conversation patterns
             - Ask follow-up questions that show you care
-            - Give emotional validation and support
+            - Give emotional validation and support but not just repeat what they said. focus and think about how to push the store further.
             - Use expressions like "wow", "oh my", "that sounds amazing/scary/beautiful"
             
             RESPONSE EXAMPLES:
@@ -585,7 +716,7 @@ class DreamConversationManager: NSObject, ObservableObject {
             - When they say "that's it", "done", etc. - lovingly acknowledge and wrap up
             - Don't repeat their story back, just respond emotionally and ask for more
             - Be present and engaged like a caring partner would be
-        limit your response to 50 words
+        limit your response to 30 words
         """
         
         let conversationHistory = messages.map { message in
@@ -641,48 +772,218 @@ class DreamConversationManager: NSObject, ObservableObject {
     
     // MARK: - Dream Analysis
     
-    private func generateDreamSummary() -> String {
-        let userMessages = messages.filter { !$0.isFromAI }.map { $0.content }
-        return userMessages.joined(separator: " ")
+    private func generateGPTSummary(dreamText: String) async throws -> String {
+        guard let url = URL(string: openAIURL) else {
+            throw URLError(.badURL)
+        }
+        
+        let systemMessage = """
+        You are a dream analyst. Create an insightful summary of the dream described below. 
+        Focus on the main narrative, key symbols, emotions, and any notable patterns or themes. make sure to keep all the information as detailed as possible. always use a second person perspective
+        """
+        
+        let userPrompt = "Please summarize this dream: \(dreamText)"
+        
+        let requestBody: [String: Any] = [
+            "model": AppConfig.openAIModel,
+            "messages": [
+                ["role": "system", "content": systemMessage],
+                ["role": "user", "content": userPrompt]
+            ],
+            "max_tokens": 150,
+            "temperature": 0.7
+        ]
+        
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("Bearer \(AppConfig.openAIAPIKey)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONSerialization.data(withJSONObject: requestBody)
+        
+        let (data, _) = try await URLSession.shared.data(for: request)
+        
+        if let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+           let choices = json["choices"] as? [[String: Any]],
+           let firstChoice = choices.first,
+           let message = firstChoice["message"] as? [String: Any],
+           let content = message["content"] as? String {
+            return content.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        
+        throw URLError(.cannotParseResponse)
+    }
+    
+    private func generateDreamTitle(dreamText: String) async throws -> String {
+        guard let url = URL(string: openAIURL) else {
+            throw URLError(.badURL)
+        }
+        
+        let systemMessage = """
+        You are a creative dream interpreter. Generate a short, evocative title for the dream described below.
+        The title should be 2-6 words that capture the essence, main theme, or most memorable element of the dream.
+        Make it poetic, intriguing, and memorable. Avoid generic titles.
+        
+        Examples of good titles:
+        - "The Flying Library"
+        - "Underwater Tea Party"
+        - "Chasing Purple Shadows"
+        - "The Singing Forest"
+        - "Lost in Mirror Maze"
+        """
+        
+        let userPrompt = "Create a creative title for this dream: \(dreamText)"
+        
+        let requestBody: [String: Any] = [
+            "model": AppConfig.openAIModel,
+            "messages": [
+                ["role": "system", "content": systemMessage],
+                ["role": "user", "content": userPrompt]
+            ],
+            "max_tokens": 50,
+            "temperature": 0.8
+        ]
+        
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("Bearer \(AppConfig.openAIAPIKey)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONSerialization.data(withJSONObject: requestBody)
+        
+        let (data, _) = try await URLSession.shared.data(for: request)
+        
+        if let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+           let choices = json["choices"] as? [[String: Any]],
+           let firstChoice = choices.first,
+           let message = firstChoice["message"] as? [String: Any],
+           let content = message["content"] as? String {
+            return content.trimmingCharacters(in: .whitespacesAndNewlines).replacingOccurrences(of: "\"", with: "")
+        }
+        
+        throw URLError(.cannotParseResponse)
+    }
+    
+    private func generateAIKeywords(dreamText: String) async throws -> [String] {
+        guard let url = URL(string: openAIURL) else {
+            throw URLError(.badURL)
+        }
+        
+        let systemMessage = """
+        You are a dream analyst. Extract 5-8 key themes, symbols, emotions, and elements from the dream described below.
+        Focus on the most significant and searchable aspects that would help someone find this dream later.
+        Return only the keywords separated by commas, no explanations.
+        
+        Examples: flying, water, family, anxiety, childhood home, purple light, transformation, chase
+        """
+        
+        let userPrompt = "Extract key searchable elements from this dream: \(dreamText)"
+        
+        let requestBody: [String: Any] = [
+            "model": AppConfig.openAIModel,
+            "messages": [
+                ["role": "system", "content": systemMessage],
+                ["role": "user", "content": userPrompt]
+            ],
+            "max_tokens": 100,
+            "temperature": 0.5
+        ]
+        
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("Bearer \(AppConfig.openAIAPIKey)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONSerialization.data(withJSONObject: requestBody)
+        
+        let (data, _) = try await URLSession.shared.data(for: request)
+        
+        if let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+           let choices = json["choices"] as? [[String: Any]],
+           let firstChoice = choices.first,
+           let message = firstChoice["message"] as? [String: Any],
+           let content = message["content"] as? String {
+            let keywords = content.trimmingCharacters(in: .whitespacesAndNewlines)
+                .components(separatedBy: ",")
+                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines).capitalized }
+                .filter { !$0.isEmpty }
+            return Array(keywords.prefix(8))
+        }
+        
+        throw URLError(.cannotParseResponse)
     }
     
     private func analyzeDreamMood() -> DreamMood {
-        let dreamText = generateDreamSummary().lowercased()
+        let dreamText = messages.filter { !$0.isFromAI }.map { $0.content }.joined(separator: " ").lowercased()
         
-        if dreamText.contains("nightmare") || dreamText.contains("scary") || dreamText.contains("afraid") {
-            return .nightmare
-        } else if dreamText.contains("peaceful") || dreamText.contains("calm") || dreamText.contains("serene") {
-            return .peaceful
-        } else if dreamText.contains("anxious") || dreamText.contains("worried") || dreamText.contains("stress") {
-            return .anxious
-        } else if dreamText.contains("lucid") || dreamText.contains("control") || dreamText.contains("aware") {
-            return .lucid
-        } else if dreamText.contains("vivid") || dreamText.contains("bright") || dreamText.contains("colorful") {
-            return .vivid
-        } else if dreamText.contains("happy") || dreamText.contains("joy") || dreamText.contains("pleasant") {
-            return .pleasant
+        // Enhanced mood analysis with more keywords
+        let moodKeywords: [DreamMood: [String]] = [
+            .nightmare: ["nightmare", "scary", "afraid", "terrified", "horror", "monster", "chase", "trapped", "falling", "death", "dark", "evil"],
+            .anxious: ["anxious", "worried", "stress", "nervous", "panic", "overwhelmed", "lost", "confused", "pressure", "urgent"],
+            .peaceful: ["peaceful", "calm", "serene", "tranquil", "relaxed", "gentle", "soft", "quiet", "still", "meditation"],
+            .lucid: ["lucid", "control", "aware", "conscious", "realize", "knew I was dreaming", "could control"],
+            .vivid: ["vivid", "bright", "colorful", "clear", "detailed", "realistic", "intense", "sharp"],
+            .pleasant: ["happy", "joy", "pleasant", "wonderful", "beautiful", "amazing", "love", "fun", "exciting", "magical"]
+        ]
+        
+        var moodScores: [DreamMood: Int] = [:]
+        
+        for (mood, keywords) in moodKeywords {
+            let score = keywords.reduce(0) { count, keyword in
+                count + dreamText.components(separatedBy: keyword).count - 1
+            }
+            moodScores[mood] = score
         }
         
-        return .neutral
+        // Return the mood with the highest score, or neutral if no matches
+        let topMood = moodScores.max { $0.value < $1.value }
+        return topMood?.value ?? 0 > 0 ? topMood!.key : .neutral
     }
     
     private func extractDreamTags() -> [String] {
-        let dreamText = generateDreamSummary().lowercased()
-        var tags: [String] = []
+        let dreamText = messages.filter { !$0.isFromAI }.map { $0.content }.joined(separator: " ").lowercased()
         
-        let commonDreamElements = [
-            "flying", "falling", "water", "animals", "family", "friends", "school", "work",
-            "house", "car", "death", "birth", "wedding", "travel", "food", "money",
-            "chase", "lost", "late", "naked", "teeth", "hair", "blood", "fire"
+        // Common dream symbols and themes
+        let dreamSymbols = [
+            // People
+            "family", "mother", "father", "friend", "stranger", "child", "baby", "teacher", "boss",
+            // Animals
+            "dog", "cat", "bird", "snake", "spider", "horse", "fish", "lion", "bear", "wolf",
+            // Places
+            "house", "school", "work", "beach", "forest", "mountain", "city", "car", "airplane", "train",
+            // Objects
+            "water", "fire", "mirror", "door", "window", "phone", "computer", "book", "money", "key",
+            // Actions
+            "flying", "falling", "running", "swimming", "driving", "climbing", "dancing", "singing",
+            // Emotions/States
+            "lost", "trapped", "free", "powerful", "weak", "invisible", "giant", "small",
+            // Colors
+            "red", "blue", "green", "yellow", "black", "white", "purple", "orange", "pink",
+            // Weather/Nature
+            "rain", "snow", "sun", "storm", "wind", "ocean", "river", "tree", "flower"
         ]
         
-        for element in commonDreamElements {
-            if dreamText.contains(element) {
-                tags.append(element.capitalized)
+        var foundTags: [String] = []
+        
+        for symbol in dreamSymbols {
+            if dreamText.contains(symbol) {
+                foundTags.append(symbol.capitalized)
             }
         }
         
-        return Array(Set(tags)).sorted()
+        // Also extract any words that appear multiple times (potential important themes)
+        let words = dreamText.components(separatedBy: CharacterSet.whitespacesAndNewlines.union(.punctuationCharacters))
+            .filter { $0.count > 3 } // Only words longer than 3 characters
+            .map { $0.lowercased() }
+        
+        let wordCounts = words.reduce(into: [:]) { counts, word in
+            counts[word, default: 0] += 1
+        }
+        
+        let repeatedWords = wordCounts.filter { $0.value > 1 && $0.key.count > 4 }
+            .map { $0.key.capitalized }
+        
+        foundTags.append(contentsOf: repeatedWords)
+        
+        // Remove duplicates and limit to 10 tags
+        return Array(Set(foundTags)).prefix(10).map { String($0) }
     }
     
     // MARK: - Audio Session Setup
@@ -713,7 +1014,7 @@ class DreamConversationManager: NSObject, ObservableObject {
     }
     
     func clearAllSessions() {
-        dreamSessions = []
+        dreamSessions.removeAll()
         saveDreamSessions()
     }
     
@@ -912,3 +1213,4 @@ extension DreamConversationManager: AVSpeechSynthesizerDelegate {
         }
     }
 } 
+
