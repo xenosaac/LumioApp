@@ -24,129 +24,160 @@ struct AddAlarmView: View {
     
     var body: some View {
         NavigationView {
-            Form {
-                Section(header: Text("Alarm Details")) {
-                    TextField("Alarm Name (Optional)", text: $name)
-                        .textContentType(.none)
-                        .autocapitalization(.none)
-                    
-                    DatePicker("Start Time", selection: $startTime, displayedComponents: .hourAndMinute)
-                    DatePicker("End Time", selection: $endTime, displayedComponents: .hourAndMinute)
-                    
-                    if !isTimeValid {
-                        Text("Start time must be earlier than or equal to end time")
-                            .foregroundColor(.red)
-                            .font(.caption)
-                    }
-                }
-                
-                Section(header: Text("Sound")) {
-                    Picker("Alarm Sound", selection: $selectedSound) {
-                        ForEach(Array(soundManager.availableSounds.keys), id: \.self) { name in
-                            Text(name).tag(soundManager.availableSounds[name]!)
-                        }
-                    }
-                    .pickerStyle(DefaultPickerStyle())
-                    .onChange(of: selectedSound) { _ in
-                        // 当选择新声音时停止播放之前的声音
-                        soundManager.stopSound()
-                    }
-                    
-                    Button(action: {
-                        // 切换播放/暂停
-                        soundManager.togglePlayPause(selectedSound)
-                    }) {
-                        Label(
-                            soundManager.isPreviewPlaying && soundManager.currentSoundName == selectedSound 
-                                ? "Stop Preview" : "Preview Sound", 
-                            systemImage: soundManager.isPreviewPlaying && soundManager.currentSoundName == selectedSound 
-                                ? "stop.circle" : "play.circle"
-                        )
-                        .foregroundColor(soundManager.isPreviewPlaying && soundManager.currentSoundName == selectedSound 
-                            ? .red : .blue)
-                    }
-                }
-                
-                Section(header: Text("Smart Wake")) {
-                    Toggle("Enable Smart Wake", isOn: $useSmartWake)
-                    
-                    if useSmartWake {
-                        // Add explanation text
-                        VStack(alignment: .leading, spacing: 8) {
-                            Text("Smart Wake uses Apple Watch to monitor your sleep and wake you at the optimal moment within your set time range.")
-                                .font(.caption)
-                                .foregroundColor(.secondary)
-                                .fixedSize(horizontal: false, vertical: true)
-                            
-                            Text("If no optimal wake moment is found, you'll be awakened at the end time.")
-                                .font(.caption)
-                                .foregroundColor(.secondary)
-                                .fixedSize(horizontal: false, vertical: true)
-                        }
-                        .padding(.vertical, 4)
+            ZStack {
+                // Background gradient
+                LinearGradient(colors: [.appPurple, .appPurpleDark], startPoint: .topLeading, endPoint: .bottomTrailing)
+                    .ignoresSafeArea()
+
+                Form {
+                    Section(header: Text("Alarm Details")) {
+                        TextField("Alarm Name (Optional)", text: $name)
+                            .textContentType(.none)
+                            .autocapitalization(.none)
                         
-                        if !watchConnectivity.isConnected {
-                            HStack {
-                                Image(systemName: "exclamationmark.triangle")
-                                    .foregroundColor(.orange)
-                                
-                                Text("Apple Watch connection required for Smart Wake")
+                        DatePicker("Start Time", selection: $startTime, displayedComponents: .hourAndMinute)
+                        DatePicker("End Time", selection: $endTime, displayedComponents: .hourAndMinute)
+                        
+                        if !isTimeValid {
+                            Text("Start time must be earlier than or equal to end time")
+                                .foregroundColor(.red)
+                                .font(.caption)
+                        }
+                    }
+                    
+                    Section(header: Text("Sound")) {
+                        Picker("Alarm Sound", selection: $selectedSound) {
+                            ForEach(Array(soundManager.availableSounds.keys), id: \.self) { name in
+                                Text(name).tag(soundManager.availableSounds[name]!)
+                            }
+                        }
+                        .pickerStyle(DefaultPickerStyle())
+                        .onChange(of: selectedSound) { _ in
+                            // 当选择新声音时停止播放之前的声音
+                            soundManager.stopSound()
+                        }
+                        
+                        Button(action: {
+                            // 切换播放/暂停
+                            soundManager.togglePlayPause(selectedSound)
+                        }) {
+                            Label(
+                                soundManager.isPreviewPlaying && soundManager.currentSoundName == selectedSound 
+                                    ? "Stop Preview" : "Preview Sound", 
+                                systemImage: soundManager.isPreviewPlaying && soundManager.currentSoundName == selectedSound 
+                                    ? "stop.circle" : "play.circle"
+                            )
+                            .foregroundColor(soundManager.isPreviewPlaying && soundManager.currentSoundName == selectedSound 
+                                ? .red : .blue)
+                        }
+                    }
+                    
+                    Section(header: Text("Smart Wake")) {
+                        Toggle("Enable Smart Wake", isOn: $useSmartWake)
+                        
+                        if useSmartWake {
+                            // Add explanation text
+                            VStack(alignment: .leading, spacing: 8) {
+                                Text("Smart Wake uses Apple Watch to monitor your sleep and wake you at the optimal moment within your set time range.")
                                     .font(.caption)
-                                    .foregroundColor(.orange)
+                                    .foregroundColor(.secondary)
+                                    .fixedSize(horizontal: false, vertical: true)
+                                
+                        
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                                    .fixedSize(horizontal: false, vertical: true)
                             }
                             .padding(.vertical, 4)
+                            
+                            if !watchConnectivity.isConnected {
+                                HStack {
+                                    Image(systemName: "exclamationmark.triangle")
+                                        .foregroundColor(.orange)
+                                    
+                                    Text("Apple Watch connection required for Smart Wake")
+                                        .font(.caption)
+                                        .foregroundColor(.orange)
+                                }
+                                .padding(.vertical, 4)
+                            }
                         }
                     }
-                }
-                
-                Section(header: Text("Repeat")) {
-                    ScrollView(.horizontal, showsIndicators: false) {
-                        HStack(spacing: 12) {
-                            ForEach(Weekday.allCases, id: \.self) { weekday in
-                                Button(action: {
-                                    if selectedDays.contains(weekday) {
-                                        selectedDays.remove(weekday)
-                                    } else {
-                                        selectedDays.insert(weekday)
+                    
+                    Section(header: Text("Repeat")) {
+                        ScrollView(.horizontal, showsIndicators: false) {
+                            HStack(spacing: 12) {
+                                ForEach(Weekday.allCases, id: \.self) { weekday in
+                                    Button(action: {
+                                        if selectedDays.contains(weekday) {
+                                            selectedDays.remove(weekday)
+                                        } else {
+                                            selectedDays.insert(weekday)
+                                        }
+                                    }) {
+                                        Text(weekdayAbbreviations[weekday.rawValue - 1])
+                                            .font(.system(size: 14, weight: .medium))
+                                            .frame(width: 44, height: 44)
+                                            .background(
+                                                Circle()
+                                                    .fill(selectedDays.contains(weekday) ? 
+                                                        (weekday == .sunday || weekday == .saturday ? Color.red : Color.blue) : 
+                                                        Color.clear)
+                                            )
+                                            .overlay(
+                                                Circle()
+                                                    .stroke(weekday == .sunday || weekday == .saturday ? Color.red : Color.blue, lineWidth: 1)
+                                            )
+                                            .foregroundColor(selectedDays.contains(weekday) ? .white : 
+                                                (weekday == .sunday || weekday == .saturday ? Color.red : Color.blue))
                                     }
-                                }) {
-                                    Text(weekdayAbbreviations[weekday.rawValue - 1])
-                                        .font(.system(size: 14, weight: .medium))
-                                        .frame(width: 44, height: 44)
-                                        .background(
-                                            Circle()
-                                                .fill(selectedDays.contains(weekday) ? 
-                                                    (weekday == .sunday || weekday == .saturday ? Color.red : Color.blue) : 
-                                                    Color.clear)
-                                        )
-                                        .overlay(
-                                            Circle()
-                                                .stroke(weekday == .sunday || weekday == .saturday ? Color.red : Color.blue, lineWidth: 1)
-                                        )
-                                        .foregroundColor(selectedDays.contains(weekday) ? .white : 
-                                            (weekday == .sunday || weekday == .saturday ? Color.red : Color.blue))
                                 }
                             }
                         }
                         .padding(.vertical, 8)
                     }
                 }
+                .scrollContentBackground(.hidden)
             }
             .navigationTitle("New Alarm")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbarBackground(.visible, for: .navigationBar)
+            .toolbarColorScheme(.light, for: .navigationBar)
             .navigationBarItems(
                 leading: Button("Cancel") {
                     // 停止任何正在播放的预览声音
                     soundManager.stopSound()
                     dismiss()
-                },
+                }
+                .foregroundColor(.black),
                 trailing: Button("Save") {
                     saveAlarm()
                 }
                 .disabled(!isTimeValid)
+                .foregroundColor(.black)
             )
             .onDisappear {
                 // 确保在视图消失时停止任何声音播放
                 soundManager.stopSound()
+            }
+            .onAppear {
+                // Override the yellow navigation bar appearance for this view only
+                let appearance = UINavigationBarAppearance()
+                appearance.configureWithDefaultBackground()
+                appearance.backgroundColor = UIColor.systemBackground
+                appearance.titleTextAttributes = [
+                    .foregroundColor: UIColor.label
+                ]
+                appearance.largeTitleTextAttributes = [
+                    .foregroundColor: UIColor.label
+                ]
+                
+                // Apply to this navigation controller only
+                if let navigationController = UIApplication.shared.windows.first?.rootViewController as? UITabBarController,
+                   let selectedNav = navigationController.selectedViewController as? UINavigationController {
+                    selectedNav.navigationBar.standardAppearance = appearance
+                    selectedNav.navigationBar.scrollEdgeAppearance = appearance
+                }
             }
         }
     }

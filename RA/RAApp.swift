@@ -45,6 +45,9 @@ struct RAApp: App {
     @StateObject private var notificationManager = NotificationManager.shared
     @StateObject private var sleepManager = SleepManager.shared
     @StateObject private var watchConnectivity = WatchConnectivityManager.shared
+    
+    // Check if this is the user's first time opening the app
+    @State private var isFirstLaunch = !UserDefaults.standard.bool(forKey: "HasLaunchedBefore")
 
     init() {
         notificationManager.alarmManager = alarmManager
@@ -92,11 +95,35 @@ struct RAApp: App {
 
     var body: some Scene {
         WindowGroup {
-            ContentView()
+            // Always show welcome page
+            WelcomeView()
                 .environmentObject(alarmManager)
                 .environmentObject(notificationManager)
                 .environmentObject(sleepManager)
                 .environmentObject(watchConnectivity)
+                
+            // Original first-launch logic (commented out):
+            /*
+            Group {
+                if isFirstLaunch {
+                    WelcomeView()
+                        .environmentObject(alarmManager)
+                        .environmentObject(notificationManager)
+                        .environmentObject(sleepManager)
+                        .environmentObject(watchConnectivity)
+                        .onAppear {
+                            // Mark that the app has been launched before
+                            UserDefaults.standard.set(true, forKey: "HasLaunchedBefore")
+                        }
+                } else {
+                    ContentView()
+                        .environmentObject(alarmManager)
+                        .environmentObject(notificationManager)
+                        .environmentObject(sleepManager)
+                        .environmentObject(watchConnectivity)
+                }
+            }
+            */
         }
     }
 }

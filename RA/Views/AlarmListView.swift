@@ -9,7 +9,48 @@ struct AlarmListView: View {
     var body: some View {
         NavigationView {
             ZStack {
-                List {
+                // Faded purple gradient background
+                LinearGradient(
+                    colors: [
+                        .appPurple, .appPurpleDark
+                    ],
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
+                )
+                .ignoresSafeArea()
+                
+                VStack(spacing: 0) {
+                    // Custom Centered Title
+                    HStack {
+                        Spacer()
+                        Text("LUMIO")
+                            .font(.system(size: 38, weight: .bold))
+                            .foregroundColor(.appPurpleDark)
+                        Spacer()
+                    }
+                    .padding(.bottom, 8)
+                    
+                    if alarmManager.alarms.isEmpty {
+                        Spacer()
+                        VStack(spacing: 20) {
+                            Image(systemName: "alarm")
+                                .font(.system(size: 70, weight: .light))
+                                .foregroundColor(.white)
+                            
+                            Text("No alarms yet")
+                                .font(.title)
+                                .fontWeight(.medium)
+                                .foregroundColor(.white)
+                            
+                            Text("Tap + to add a new alarm")
+                                .font(.body)
+                                .fontWeight(.regular)
+                                .foregroundColor(.white.opacity(0.8))
+                        }
+                        Spacer()
+                    } else {
+                        ScrollView {
+                            LazyVStack(spacing: 16) {
                     ForEach(alarmManager.alarms) { alarm in
                         AlarmRowView(alarm: alarm)
                             .contentShape(Rectangle())
@@ -19,36 +60,24 @@ struct AlarmListView: View {
                                 editingAlarm = alarm
                             }
                     }
-                    .onDelete { indexSet in
-                        for index in indexSet {
-                            alarmManager.deleteAlarm(alarmManager.alarms[index])
+                                .onDelete(perform: deleteAlarms)
+                            }
+                            .padding()
+                        }
                         }
                     }
                 }
-                .listStyle(InsetGroupedListStyle())
-                
-                if alarmManager.alarms.isEmpty {
-                    VStack {
-                        Spacer()
-                        Text("No alarms yet")
-                            .font(.title3)
-                            .foregroundColor(.gray)
-                        Text("Tap + to add a new alarm")
-                            .font(.subheadline)
-                            .foregroundColor(.gray)
-                            .padding(.top, 4)
-                        Spacer()
-                    }
-                }
-            }
-            .navigationTitle("Alarms")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbarBackground(.clear, for: .navigationBar)
+            .toolbarColorScheme(.dark, for: .navigationBar)
             .toolbar {
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button(action: {
                         isAddingAlarm = true
                     }) {
                         Image(systemName: "plus")
-                            .font(.system(size: 20))
+                            .font(.system(size: 22, weight: .medium))
+                            .foregroundColor(.appYellow)
                     }
                 }
             }
@@ -60,6 +89,27 @@ struct AlarmListView: View {
             }
         }
         .navigationViewStyle(StackNavigationViewStyle())
+        .onAppear {
+            // Hide navigation bar title
+            let appearance = UINavigationBarAppearance()
+            appearance.configureWithTransparentBackground()
+            appearance.titleTextAttributes = [
+                .foregroundColor: UIColor.clear
+            ]
+            appearance.largeTitleTextAttributes = [
+                .foregroundColor: UIColor.clear
+            ]
+            UINavigationBar.appearance().standardAppearance = appearance
+            UINavigationBar.appearance().scrollEdgeAppearance = appearance
+        }
+    }
+    
+    // Function to handle deleting alarms
+    private func deleteAlarms(at offsets: IndexSet) {
+        for index in offsets {
+            let alarm = alarmManager.alarms[index]
+            alarmManager.deleteAlarm(alarm)
+        }
     }
 }
 
@@ -69,35 +119,55 @@ struct AlarmRowView: View {
     @EnvironmentObject var notificationManager: NotificationManager
     
     var body: some View {
-        VStack(alignment: .leading) {
+        VStack(alignment: .leading, spacing: 14) {
             HStack {
-                VStack(alignment: .leading, spacing: 4) {
+                VStack(alignment: .leading, spacing: 8) {
                     if !alarm.name.isEmpty {
                         Text(alarm.name)
-                            .font(.headline)
+                            .font(.title3)
+                            .fontWeight(.semibold)
+                            .foregroundColor(.white)
                     }
                     
-                    Text("Start Time: \(alarm.startTime.formatted(date: .omitted, time: .shortened))")
-                        .font(.subheadline)
+                    Text("Start: \(alarm.startTime.formatted(date: .omitted, time: .shortened))")
+                        .font(.body)
+                        .fontWeight(.medium)
+                        .foregroundColor(.white.opacity(0.9))
                     
-                    Text("End Time: \(alarm.endTime.formatted(date: .omitted, time: .shortened))")
-                        .font(.subheadline)
+                    Text("End: \(alarm.endTime.formatted(date: .omitted, time: .shortened))")
+                        .font(.body)
+                        .fontWeight(.medium)
+                        .foregroundColor(.white.opacity(0.9))
                 }
+                
                 Spacer()
+                
                 Toggle("", isOn: Binding(
                     get: { alarm.isActive },
                     set: { _ in alarmManager.toggleAlarm(alarm) }
                 ))
                 .labelsHidden()
+                .toggleStyle(SwitchToggleStyle(tint: .yellow))
+                .scaleEffect(1.1)
             }
             
             if !alarm.repeatDays.isEmpty {
                 Text("Repeat: \(alarm.repeatDays.map { $0.name }.joined(separator: ", "))")
-                    .font(.caption)
-                    .foregroundColor(.gray)
+                    .font(.subheadline)
+                    .fontWeight(.regular)
+                    .foregroundColor(.white.opacity(0.75))
             }
         }
-        .padding(.vertical, 4)
+        .padding(20)
+        .background(
+            RoundedRectangle(cornerRadius: 20)
+                .fill(.ultraThinMaterial)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 20)
+                        .stroke(.white.opacity(0.25), lineWidth: 1)
+                )
+        )
     }
 } 
+ 
  

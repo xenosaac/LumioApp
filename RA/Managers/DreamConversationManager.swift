@@ -133,15 +133,23 @@ class DreamConversationManager: NSObject, ObservableObject {
             
             // Then generate AI content and update
             let dreamText = messages.filter { !$0.isFromAI }.map { $0.content }.joined(separator: " ")
+            print("🔍 Dream text for AI analysis: '\(dreamText)' (length: \(dreamText.count))")
+            
             if dreamText.count > 50 {
                 Task {
+                    print("🚀 Starting AI content generation...")
                     do {
-                        // Generate all AI content
-                        async let summary = generateGPTSummary(dreamText: dreamText)
-                        async let title = generateDreamTitle(dreamText: dreamText)
-                        async let aiKeywords = generateAIKeywords(dreamText: dreamText)
+                        print("📝 Generating summary...")
+                        let summary = try await generateGPTSummary(dreamText: dreamText)
+                        print("✅ Summary generated: \(summary.prefix(50))...")
                         
-                        let (generatedSummary, generatedTitle, generatedKeywords) = try await (summary, title, aiKeywords)
+                        print("🏷️ Generating title...")
+                        let title = try await generateDreamTitle(dreamText: dreamText)
+                        print("✅ Title generated: '\(title)'")
+                        
+                        print("🔖 Generating keywords...")
+                        let aiKeywords = try await generateAIKeywords(dreamText: dreamText)
+                        print("✅ Keywords generated: \(aiKeywords)")
                         
                         DispatchQueue.main.async {
                             // Update the session with AI-generated content
@@ -151,19 +159,32 @@ class DreamConversationManager: NSObject, ObservableObject {
                                     startTime: session.startTime,
                                     endTime: basicSession.endTime,
                                     messages: self.messages,
-                                    dreamSummary: generatedSummary,
+                                    dreamSummary: summary,
                                     mood: self.analyzeDreamMood(),
-                                    tags: generatedKeywords,
-                                    title: generatedTitle
+                                    tags: aiKeywords,
+                                    title: title
                                 )
                                 
                                 self.dreamSessions[index] = updatedSession
                                 self.saveDreamSessions()
-                                print("✅ AI content generated and session updated")
+                                print("✅ AI content generated and session updated successfully")
+                                print("   📄 Title: '\(title)'")
+                                print("   📝 Summary: '\(summary.prefix(100))...'")
+                                print("   🏷️ Tags: \(aiKeywords)")
+                            } else {
+                                print("❌ Could not find session to update")
                             }
                         }
                     } catch {
-                        print("Failed to generate AI content: \(error)")
+                        print("❌ Failed to generate AI content: \(error)")
+                        print("   Error details: \(error.localizedDescription)")
+                        
+                        // Try to get more specific error information
+                        if let urlError = error as? URLError {
+                            print("   URL Error Code: \(urlError.code)")
+                            print("   URL Error Description: \(urlError.localizedDescription)")
+                        }
+                        
                         // Update with fallback content
                         DispatchQueue.main.async {
                             if let index = self.dreamSessions.firstIndex(where: { $0.id == session.id }) {
@@ -180,10 +201,13 @@ class DreamConversationManager: NSObject, ObservableObject {
                                 
                                 self.dreamSessions[index] = fallbackSession
                                 self.saveDreamSessions()
+                                print("📝 Updated session with fallback content")
                             }
                         }
                     }
                 }
+            } else {
+                print("⚠️ Dream text too short (\(dreamText.count) chars), skipping AI generation")
             }
         }
         
@@ -568,23 +592,139 @@ class DreamConversationManager: NSObject, ObservableObject {
     // MARK: - Text-to-Speech
     
     private func speakText(_ text: String) {
+        print("🗣️ Attempting to speak: \(text)")
+        
+        // First, try to configure audio session with comprehensive debugging
+        setupAudioSessionForSpeech()
+        
         let utterance = AVSpeechUtterance(string: text)
         
-        // Use a more natural voice
+        // Use a more natural voice with better fallback
         if let voice = AVSpeechSynthesisVoice(language: AppConfig.speechRecognitionLocale) {
             utterance.voice = voice
+            print("✅ Using voice: \(voice.name) (\(voice.language)) - Quality: \(voice.quality.rawValue)")
+        } else if let voice = AVSpeechSynthesisVoice(language: "en-US") {
+            utterance.voice = voice
+            print("✅ Using fallback voice: \(voice.name) (\(voice.language)) - Quality: \(voice.quality.rawValue)")
         } else {
-            // Fallback to default voice
-            utterance.voice = AVSpeechSynthesisVoice(language: "en-US")
+            print("⚠️ No voice found, using system default")
         }
         
         utterance.rate = AppConfig.speechRate
         utterance.pitchMultiplier = 1.0
         utterance.volume = AppConfig.speechVolume
         
+        print("🔊 TTS Settings - Rate: \(utterance.rate), Volume: \(utterance.volume), Pitch: \(utterance.pitchMultiplier)")
+        
+        // Check if synthesizer is available and ready
+        print("🎙️ Synthesizer state:")
+        print("   - Is speaking: \(synthesizer.isSpeaking)")
+        print("   - Is paused: \(synthesizer.isPaused)")
+        
+        if synthesizer.isSpeaking {
+            print("⚠️ Synthesizer is already speaking, stopping previous speech")
+            synthesizer.stopSpeaking(at: .immediate)
+            
+            // Wait a moment before starting new speech
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+                self.attemptSpeechSynthesis(utterance)
+            }
+        } else {
+            attemptSpeechSynthesis(utterance)
+        }
+    }
+    
+    private func setupAudioSessionForSpeech() {
+        do {
+            let audioSession = AVAudioSession.sharedInstance()
+            
+            // Try multiple configurations in order of preference
+            let configurations: [(AVAudioSession.Category, AVAudioSession.Mode, AVAudioSession.CategoryOptions)] = [
+                (.playAndRecord, .spokenAudio, [.defaultToSpeaker, .allowBluetooth, .allowBluetoothA2DP, .mixWithOthers]),
+                (.playback, .spokenAudio, [.defaultToSpeaker, .allowBluetooth, .allowBluetoothA2DP]),
+                (.playAndRecord, .default, [.defaultToSpeaker]),
+                (.playback, .default, [])
+            ]
+            
+            var success = false
+            
+            for (category, mode, options) in configurations {
+                do {
+                    try audioSession.setCategory(category, mode: mode, options: options)
+                    try audioSession.setActive(true, options: .notifyOthersOnDeactivation)
+                    
+                    print("✅ Audio session configured successfully:")
+                    print("   - Category: \(category)")
+                    print("   - Mode: \(mode)")
+                    print("   - Options: \(options)")
+                    print("   - Current route: \(audioSession.currentRoute.outputs.map { $0.portName }.joined(separator: ", "))")
+                    
+                    success = true
+                    break
+                } catch {
+                    print("❌ Failed to configure audio session with \(category)/\(mode): \(error)")
+                    continue
+                }
+            }
+            
+            if !success {
+                print("❌ Failed to configure audio session with any configuration!")
+            }
+            
+            // Additional audio session info
+            print("📱 Final audio session state:")
+            print("   - Output volume: \(audioSession.outputVolume)")
+            print("   - Other audio playing: \(audioSession.isOtherAudioPlaying)")
+            print("   - Available inputs: \(audioSession.availableInputs?.count ?? 0)")
+            
+        } catch {
+            print("❌ Critical error setting up audio session: \(error)")
+        }
+    }
+    
+    private func attemptSpeechSynthesis(_ utterance: AVSpeechUtterance) {
         isAISpeaking = true
         conversationState = .speaking
+        
+        print("🎙️ Starting speech synthesis...")
+        print("   - Text length: \(utterance.speechString.count) characters")
+        print("   - Voice: \(utterance.voice?.name ?? "default")")
+        
+        // Start synthesis
         synthesizer.speak(utterance)
+        
+        // Add multiple timeout checks to verify TTS actually starts
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+            if self.synthesizer.isSpeaking {
+                print("✅ Speech synthesis confirmed started after 0.5s")
+            } else {
+                print("❌ Speech synthesis may have failed - synthesizer not speaking after 0.5s")
+                self.handleSpeechSynthesisFailure()
+            }
+        }
+        
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
+            if self.synthesizer.isSpeaking {
+                print("✅ Speech synthesis still active after 2s")
+            } else {
+                print("⚠️ Speech synthesis finished or failed within 2s")
+            }
+        }
+    }
+    
+    private func handleSpeechSynthesisFailure() {
+        print("🔧 Attempting TTS recovery...")
+        
+        // Try to reset the synthesizer
+        isAISpeaking = false
+        
+        // Test with a very simple utterance
+        let simpleTest = AVSpeechUtterance(string: "Test")
+        simpleTest.rate = 0.5
+        simpleTest.volume = 1.0
+        
+        print("🔧 Trying simple test utterance...")
+        synthesizer.speak(simpleTest)
     }
     
     // MARK: - OpenAI Integration
@@ -814,7 +954,10 @@ class DreamConversationManager: NSObject, ObservableObject {
     }
     
     private func generateDreamTitle(dreamText: String) async throws -> String {
+        print("🏷️ Starting title generation for text: '\(dreamText.prefix(100))...'")
+        
         guard let url = URL(string: openAIURL) else {
+            print("❌ Invalid OpenAI URL")
             throw URLError(.badURL)
         }
         
@@ -843,23 +986,85 @@ class DreamConversationManager: NSObject, ObservableObject {
             "temperature": 0.8
         ]
         
+        print("🌐 Making API request to OpenAI for title generation...")
+        print("   Model: \(AppConfig.openAIModel)")
+        print("   Max tokens: 50")
+        print("   User prompt length: \(userPrompt.count)")
+        
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue("Bearer \(AppConfig.openAIAPIKey)", forHTTPHeaderField: "Authorization")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.httpBody = try JSONSerialization.data(withJSONObject: requestBody)
         
-        let (data, _) = try await URLSession.shared.data(for: request)
-        
-        if let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-           let choices = json["choices"] as? [[String: Any]],
-           let firstChoice = choices.first,
-           let message = firstChoice["message"] as? [String: Any],
-           let content = message["content"] as? String {
-            return content.trimmingCharacters(in: .whitespacesAndNewlines).replacingOccurrences(of: "\"", with: "")
+        do {
+            request.httpBody = try JSONSerialization.data(withJSONObject: requestBody)
+        } catch {
+            print("❌ Failed to serialize request body: \(error)")
+            throw error
         }
         
-        throw URLError(.cannotParseResponse)
+        do {
+            let (data, response) = try await URLSession.shared.data(for: request)
+            
+            if let httpResponse = response as? HTTPURLResponse {
+                print("📡 API Response status: \(httpResponse.statusCode)")
+                
+                if httpResponse.statusCode != 200 {
+                    print("❌ Non-200 status code received")
+                    if let responseString = String(data: data, encoding: .utf8) {
+                        print("   Response body: \(responseString)")
+                    }
+                }
+            }
+            
+            guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                print("❌ Failed to parse JSON response")
+                if let responseString = String(data: data, encoding: .utf8) {
+                    print("   Raw response: \(responseString)")
+                }
+                throw URLError(.cannotParseResponse)
+            }
+            
+            print("📄 JSON response keys: \(json.keys)")
+            
+            if let error = json["error"] as? [String: Any] {
+                print("❌ OpenAI API error: \(error)")
+                throw URLError(.badServerResponse)
+            }
+            
+            guard let choices = json["choices"] as? [[String: Any]] else {
+                print("❌ No choices in response")
+                print("   Full JSON: \(json)")
+                throw URLError(.cannotParseResponse)
+            }
+            
+            guard let firstChoice = choices.first else {
+                print("❌ Empty choices array")
+                throw URLError(.cannotParseResponse)
+            }
+            
+            guard let message = firstChoice["message"] as? [String: Any] else {
+                print("❌ No message in first choice")
+                print("   First choice: \(firstChoice)")
+                throw URLError(.cannotParseResponse)
+            }
+            
+            guard let content = message["content"] as? String else {
+                print("❌ No content in message")
+                print("   Message: \(message)")
+                throw URLError(.cannotParseResponse)
+            }
+            
+            let cleanTitle = content.trimmingCharacters(in: .whitespacesAndNewlines).replacingOccurrences(of: "\"", with: "")
+            print("✅ Title generation successful: '\(cleanTitle)'")
+            return cleanTitle
+            
+        } catch {
+            print("❌ Network error during title generation: \(error)")
+            print("   Error type: \(type(of: error))")
+            print("   Error description: \(error.localizedDescription)")
+            throw error
+        }
     }
     
     private func generateAIKeywords(dreamText: String) async throws -> [String] {
@@ -991,10 +1196,12 @@ class DreamConversationManager: NSObject, ObservableObject {
     private func setupAudioSession() {
         do {
             let audioSession = AVAudioSession.sharedInstance()
-            try audioSession.setCategory(.playAndRecord, mode: .spokenAudio, options: [.defaultToSpeaker, .allowBluetooth])
+            // Use playAndRecord category with improved options for TTS
+            try audioSession.setCategory(.playAndRecord, mode: .spokenAudio, options: [.defaultToSpeaker, .allowBluetooth, .allowBluetoothA2DP, .mixWithOthers])
             try audioSession.setActive(true)
+            print("✅ Audio session configured successfully for TTS")
         } catch {
-            print("Failed to setup audio session: \(error)")
+            print("❌ Failed to setup audio session: \(error)")
         }
     }
     
@@ -1138,6 +1345,82 @@ class DreamConversationManager: NSObject, ObservableObject {
         // Mark that we should end after this speech
         shouldEndAfterSpeaking = true
     }
+    
+    // MARK: - Debug/Test Methods
+    
+    func testTextToSpeech() {
+        print("🧪 Testing text-to-speech functionality...")
+        
+        // Check device audio state first
+        checkAudioSystemState()
+        
+        // Simple test message
+        let testMessage = "Hello! This is a test of the text to speech system. Can you hear me?"
+        
+        // Ensure we're not in a conversation
+        isConversationActive = false
+        stopContinuousListening()
+        
+        // Test the speech synthesis
+        speakText(testMessage)
+    }
+    
+    private func checkAudioSystemState() {
+        print("🔍 === AUDIO SYSTEM DIAGNOSTICS ===")
+        
+        let audioSession = AVAudioSession.sharedInstance()
+        
+        // Check volume
+        do {
+            try audioSession.setActive(true)
+            print("📱 System volume: \(audioSession.outputVolume)")
+            if audioSession.outputVolume == 0.0 {
+                print("⚠️ WARNING: System volume is at 0!")
+            }
+        } catch {
+            print("❌ Failed to check system volume: \(error)")
+        }
+        
+        // Check audio session category and options
+        print("🔊 Audio session category: \(audioSession.category)")
+        print("🔊 Audio session mode: \(audioSession.mode)")
+        print("🔊 Audio session options: \(audioSession.categoryOptions)")
+        
+        // Check current route
+        let currentRoute = audioSession.currentRoute
+        print("🎧 Current audio route:")
+        for output in currentRoute.outputs {
+            print("   - Output: \(output.portName) (\(output.portType))")
+        }
+        for input in currentRoute.inputs {
+            print("   - Input: \(input.portName) (\(input.portType))")
+        }
+        
+        // Check if other audio is playing
+        print("🎵 Other audio playing: \(audioSession.isOtherAudioPlaying)")
+        
+        // Check silent mode (iOS doesn't provide direct API, but we can check some indicators)
+        print("🔇 Audio session allows recording: \(audioSession.recordPermission == .granted)")
+        
+        // Test system sound to verify basic audio output
+        print("🔔 Testing system sound...")
+        AudioServicesPlaySystemSound(SystemSoundID(1322)) // Modern notification sound
+        
+        print("=== END AUDIO DIAGNOSTICS ===")
+    }
+    
+    func testSystemSound() {
+        print("🔔 Testing basic system sound...")
+        // Play a simple system sound to test if audio output works at all
+        AudioServicesPlaySystemSound(SystemSoundID(1322)) // Modern notification sound
+        
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+            print("🔔 System sound should have played. If you didn't hear it, check:")
+            print("   1. Device is not in silent mode (check side switch)")
+            print("   2. Volume is turned up")
+            print("   3. Audio is not routed to disconnected Bluetooth device")
+        }
+    }
 }
 
 // MARK: - AVSpeechSynthesizerDelegate
@@ -1145,7 +1428,7 @@ class DreamConversationManager: NSObject, ObservableObject {
 extension DreamConversationManager: AVSpeechSynthesizerDelegate {
     func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didFinish utterance: AVSpeechUtterance) {
         DispatchQueue.main.async {
-            print("🤖 AI finished speaking")
+            print("🤖 AI finished speaking: '\(utterance.speechString)'")
             
             // CRITICAL: Mark AI as no longer speaking
             self.isAISpeaking = false
@@ -1183,7 +1466,7 @@ extension DreamConversationManager: AVSpeechSynthesizerDelegate {
     
     func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didStart utterance: AVSpeechUtterance) {
         DispatchQueue.main.async {
-            print("🤖 AI started speaking")
+            print("🤖 AI started speaking: '\(utterance.speechString)'")
             
             // CRITICAL: Ensure we're not recording while AI speaks
             if self.isRecording {
@@ -1198,19 +1481,43 @@ extension DreamConversationManager: AVSpeechSynthesizerDelegate {
     
     func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didPause utterance: AVSpeechUtterance) {
         DispatchQueue.main.async {
-            print("🤖 AI paused speaking")
+            print("🤖 AI paused speaking: '\(utterance.speechString)'")
             // Don't start listening during pauses - wait for complete finish
         }
     }
     
     func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didContinue utterance: AVSpeechUtterance) {
         DispatchQueue.main.async {
-            print("🤖 AI continued speaking")
+            print("🤖 AI continued speaking: '\(utterance.speechString)'")
             // Ensure we're still not recording
             if self.isRecording {
                 self.stopContinuousListening()
             }
         }
+    }
+    
+    func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didCancel utterance: AVSpeechUtterance) {
+        DispatchQueue.main.async {
+            print("🤖 AI speech was cancelled: '\(utterance.speechString)'")
+            self.isAISpeaking = false
+            self.speechRecognitionState = .idle
+            
+            // If conversation is still active, try to continue
+            if self.isConversationActive && self.conversationState != .completed {
+                self.conversationState = .idle
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+                    if self.isConversationActive && !self.isAISpeaking && !self.synthesizer.isSpeaking {
+                        self.startContinuousListening()
+                    }
+                }
+            }
+        }
+    }
+    
+    func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, willSpeakRangeOfSpeechString characterRange: NSRange, utterance: AVSpeechUtterance) {
+        // Optional: Add word-by-word tracking if needed
+        let spokenText = (utterance.speechString as NSString).substring(with: characterRange)
+        print("🔤 Speaking: '\(spokenText)'")
     }
 } 
 
