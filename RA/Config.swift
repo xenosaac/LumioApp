@@ -7,7 +7,7 @@ struct AppConfig {
     // MARK: - OpenAI Configuration
     // Replace with your actual OpenAI API key
     // Get your API key from: https://platform.openai.com/api-keys
-    static let openAIAPIKey = "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"
+    static let openAIAPIKey = "YOUR API"
     
     // OpenAI API settings
     static let openAIModel = "gpt-3.5-turbo"
